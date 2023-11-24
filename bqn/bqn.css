@@ -1,0 +1,13 @@
+@font-face{
+    font-family: "BQN386";
+    src: url(./BQN386.ttf) format('truetype');
+}
+code, .code_cell .CodeMirror,.output_subarea span, pre {
+    font-family: "BQN386", "BQN386 Unicode";
+}
+
+.cm-bqn-mod1 { color: #880088; }
+.cm-bqn-mod2 { color: #ef7215; }
+.cm-bqn-func { color: #000088; }
+.cm-bqn-subj { color: #000000; }
+.cm-bqn-keyw { color: #880000; }
