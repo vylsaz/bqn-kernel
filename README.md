@@ -6,6 +6,7 @@ a jupyter kernel for BQN
 - [ ] running on actual machine
 - [ ] correct
 - [ ] better syntax highlighting
+- [ ] Rewrite It In BQN™
 
 maybe (big MAYBE)
 - [ ] support jupyter lab (it doesn't use a custom .js file,
