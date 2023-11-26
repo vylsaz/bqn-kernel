@@ -2,3 +2,4 @@
 .cbqn_repl_history
 *.dll
 *.lib
+bqn/kernel.json

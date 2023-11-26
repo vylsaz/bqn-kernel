@@ -1,12 +1,3 @@
-use std::{
-    ffi::c_char,
-    fs::File,
-    sync::{
-        mpsc::{channel, TryRecvError},
-        Mutex,
-    },
-    thread,
-};
 mod messaging;
 use cbqn_sys::{
     bqn_bound, bqn_call1, bqn_eval, bqn_free, bqn_init, bqn_makeBoundFn1, bqn_makeBoundFn2,
@@ -18,6 +9,15 @@ use messaging::{
     ConnectInfo, Message,
 };
 use serde_json::{json, Value};
+use std::{
+    ffi::c_char,
+    fs::File,
+    sync::{
+        mpsc::{channel, TryRecvError},
+        Mutex,
+    },
+    thread,
+};
 use widestring::U32String;
 use zmq::Socket;
 
@@ -53,12 +53,6 @@ static LAST_MSG: Mutex<Option<Message>> = Mutex::new(None);
 static IOPUB: Mutex<Option<Socket>> = Mutex::new(None);
 static STDIN: Mutex<Option<Socket>> = Mutex::new(None);
 
-fn send_iopub(key: &str, msg: Message) {
-    let iopub = IOPUB.lock().unwrap();
-    let iopub = iopub.as_ref().unwrap();
-    send_msg(iopub, key, msg);
-}
-
 fn notebook_input(prompt: &str, password: bool) -> String {
     let key = KEY.lock().unwrap();
     let key = key.as_ref().unwrap();
@@ -66,8 +60,6 @@ fn notebook_input(prompt: &str, password: bool) -> String {
     let msg = msg.as_ref().unwrap();
     let stdin = STDIN.lock().unwrap();
     let stdin = stdin.as_ref().unwrap();
-
-    // let stdin = STDIN.with_borrow(|s| *s).as_ref().unwrap();
 
     let mut input_req = new_msg(
         msg,
@@ -86,6 +78,12 @@ fn notebook_input(prompt: &str, password: bool) -> String {
         Some(_) | None => "",
     };
     input.to_owned()
+}
+
+fn send_iopub(key: &str, msg: Message) {
+    let iopub = IOPUB.lock().unwrap();
+    let iopub = iopub.as_ref().unwrap();
+    send_msg(iopub, key, msg);
 }
 
 fn reply_iopub(msg_type: &str, content: Value) {
@@ -313,6 +311,7 @@ fn run(ci: ConnectInfo) {
             }),
         );
         send_iopub(key, busy);
+
         match msg.header["msg_type"].as_str() {
             Some("kernel_info_request") => {
                 let re = reply_msg(&msg, kernel_info());
@@ -412,10 +411,22 @@ fn run(ci: ConnectInfo) {
         let mut my_stdin = STDIN.lock().unwrap();
         *my_stdin = None;
     }
-    {    
+    {
         let mut my_iopub = IOPUB.lock().unwrap();
         *my_iopub = None;
     }
+}
+
+#[cfg(target_os = "windows")]
+fn env_list() -> Value {
+    let dir = std::env::current_dir().unwrap();
+    let dir = dir.to_str().unwrap();
+    json!({"PATH": "%PATH%;".to_owned()+dir})
+}
+
+#[cfg(not(target_os = "windows"))]
+fn env_list() -> Value {
+    json!({})
 }
 
 fn create_kernel_json() {
@@ -427,6 +438,7 @@ fn create_kernel_json() {
         ],
         "display_name": "BQN",
         "language": "BQN",
+        "env": env_list(),
     });
     serde_json::to_writer(file, &kernel).expect("cannot write kernel.json");
 }

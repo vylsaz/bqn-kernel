@@ -13,9 +13,8 @@ RUN mkdir -p .local/share/jupyter/kernels/bqn
 RUN chown -R test ./.local
 COPY ./Cargo.toml ./Cargo.toml
 COPY ./src/       ./src/
-RUN mkdir bqn
-RUN cargo run
 COPY ./bqn/       ./bqn/
+RUN cargo run
 RUN cp -r ./bqn/  ./.local/share/jupyter/kernels/
 
 USER test

@@ -13,6 +13,5 @@ maybe (big MAYBE)
       need to investigate on how to provide input method and syntax highlighting)
 - [ ] widgets
 - [ ] plots
-- [ ] graphic
+- [ ] graphics
 - [ ] audio
-

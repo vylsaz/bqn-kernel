@@ -27,7 +27,7 @@
     ⟨path,name⟩ 𝕊 mode: ⟨path,name,⟨⟩⟩ 𝕊 mode;
     ⟨path,name,args⟩ 𝕊 mode:
         repl ⇐ mode
-        
+
         inherited ← ⟨
             "rebqn"‿•ReBQN
             "primitives"‿•primitives
@@ -75,9 +75,10 @@
             "import"‿{
             𝕊 𝕩: ⟨⟩ 𝕊 𝕩;
             𝕨 𝕊 𝕩:
-                path ← •file.Parent 𝕩
-                name ← •file.Name 𝕩
-                ⟨path,name,𝕨⟩ Exec •FChars 𝕩
+                file ← •wdpath •file.At 𝕩
+                path ← •file.Parent file
+                name ← •file.Name file
+                ⟨path,name,𝕨⟩ Exec •FChars file
             }
             "out"‿{"stdout" Output 𝕩}
             "show"‿{"stdout" Output •Fmt 𝕩, 𝕩}
