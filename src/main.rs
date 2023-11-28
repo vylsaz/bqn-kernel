@@ -9,15 +9,7 @@ use messaging::{
     ConnectInfo, Message,
 };
 use serde_json::{json, Value};
-use std::{
-    ffi::c_char,
-    fs::File,
-    sync::{
-        mpsc::{channel, TryRecvError},
-        Mutex,
-    },
-    thread,
-};
+use std::{ffi::c_char, fs::File, sync::Mutex, thread};
 use widestring::U32String;
 use zmq::Socket;
 
@@ -212,83 +204,12 @@ unsafe fn bqn_repl_execute(repl: BQNV, code: &str) -> Result<String, String> {
     }
 }
 
-fn run(ci: ConnectInfo) {
-    let ctx = zmq::Context::new();
-
-    let hb = ctx.socket(zmq::REP).unwrap();
-    hb.bind(&format_address(&ci, ci.hb_port)).unwrap();
-
-    let control = ctx.socket(zmq::ROUTER).unwrap();
-    control.bind(&format_address(&ci, ci.control_port)).unwrap();
-
-    let shell = ctx.socket(zmq::ROUTER).unwrap();
-    shell.bind(&format_address(&ci, ci.shell_port)).unwrap();
-
-    let stdin = ctx.socket(zmq::ROUTER).unwrap();
-    stdin.bind(&format_address(&ci, ci.stdin_port)).unwrap();
-
-    let iopub = ctx.socket(zmq::PUB).unwrap();
-    iopub.bind(&format_address(&ci, ci.iopub_port)).unwrap();
-
-    {
-        let mut my_stdin = STDIN.lock().unwrap();
-        *my_stdin = Some(stdin);
-    }
-    {
-        let mut my_iopub = IOPUB.lock().unwrap();
-        *my_iopub = Some(iopub);
-    }
-
-    let (hb_tx, hb_rx) = channel();
-    let (sh_tx, sh_rx) = channel();
-
-    thread::spawn(move || loop {
-        match hb_rx.try_recv() {
-            Ok(_) | Err(TryRecvError::Disconnected) => return,
-            Err(TryRecvError::Empty) => {}
-        }
-        let heartbeat = hb.recv_bytes(0).unwrap();
-        hb.send(&heartbeat, 0).unwrap();
-    });
-
-    let control_key = ci.key.clone();
-    thread::spawn(move || loop {
-        let msg = recv_msg(&control, &control_key);
-        match msg.header["msg_type"].as_str() {
-            Some("shutdown_request") => {
-                let is_restart = msg.content["restart"].as_bool().unwrap_or(false);
-                let re = reply_msg(
-                    &msg,
-                    json!({
-                        "status": "ok",
-                        "restart": is_restart,
-                    }),
-                );
-                send_msg(&control, &control_key, re);
-                hb_tx.send(()).unwrap();
-                sh_tx.send(()).unwrap();
-                return;
-            }
-            Some(_) | None => {}
-        }
-    });
-
+fn shell_execute(key: &str, shell: Socket) {
     let mut execution_count: i32 = 0;
-
-    let key = &ci.key;
-
-    {
-        let mut key = KEY.lock().unwrap();
-        *key = Some(ci.key.clone());
-    }
 
     let repl = unsafe { bqn_repl_init() };
 
     loop {
-        match sh_rx.try_recv() {
-            Ok(_) | Err(TryRecvError::Disconnected) => break,
-            Err(TryRecvError::Empty) => {}
-        }
         let msg = recv_msg(&shell, key);
 
         {
@@ -345,9 +266,8 @@ fn run(ci: ConnectInfo) {
 
                 let rslt = unsafe { bqn_repl_execute(repl, code) };
 
-                if rslt.is_ok() {
+                let re = if rslt.is_ok() {
                     let succ = rslt.unwrap();
-
                     if !silent {
                         let ex_rs = new_msg(
                             &msg,
@@ -363,17 +283,15 @@ fn run(ci: ConnectInfo) {
                         send_iopub(key, ex_rs);
                     }
 
-                    let re = reply_msg(
+                    reply_msg(
                         &msg,
                         json!({
                             "status": "ok",
                             "execution_count": execution_count,
                         }),
-                    );
-                    send_msg(&shell, key, re);
+                    )
                 } else {
                     let fail = rslt.unwrap_err();
-
                     let ex_rs = new_msg(
                         &msg,
                         "error",
@@ -385,7 +303,7 @@ fn run(ci: ConnectInfo) {
                     );
                     send_iopub(key, ex_rs);
 
-                    let re = reply_msg(
+                    reply_msg(
                         &msg,
                         json!({
                             "status": "error",
@@ -394,27 +312,78 @@ fn run(ci: ConnectInfo) {
                             "evalue": fail,
                             "traceback": [fail],
                         }),
-                    );
-                    send_msg(&shell, key, re);
+                    )
                 };
+                send_msg(&shell, key, re);
             }
             Some(_) | None => {}
         }
         send_iopub(key, idle);
     }
+}
 
-    unsafe {
-        bqn_free(repl);
-    }
+fn run(ci: ConnectInfo) {
+    let ctx = zmq::Context::new();
+
+    let hb = ctx.socket(zmq::REP).unwrap();
+    hb.bind(&format_address(&ci, ci.hb_port)).unwrap();
+
+    let control = ctx.socket(zmq::ROUTER).unwrap();
+    control.bind(&format_address(&ci, ci.control_port)).unwrap();
+
+    let shell = ctx.socket(zmq::ROUTER).unwrap();
+    shell.bind(&format_address(&ci, ci.shell_port)).unwrap();
+
+    let stdin = ctx.socket(zmq::ROUTER).unwrap();
+    stdin.bind(&format_address(&ci, ci.stdin_port)).unwrap();
+
+    let iopub = ctx.socket(zmq::PUB).unwrap();
+    iopub.bind(&format_address(&ci, ci.iopub_port)).unwrap();
 
     {
         let mut my_stdin = STDIN.lock().unwrap();
-        *my_stdin = None;
+        *my_stdin = Some(stdin);
     }
     {
         let mut my_iopub = IOPUB.lock().unwrap();
-        *my_iopub = None;
+        *my_iopub = Some(iopub);
     }
+
+    {
+        let mut key = KEY.lock().unwrap();
+        *key = Some(ci.key.clone());
+    }
+
+    thread::spawn(move || loop {
+        let heartbeat = hb.recv_bytes(0).unwrap();
+        hb.send(&heartbeat, 0).unwrap();
+    });
+
+    let shell_key = ci.key.clone();
+    thread::spawn(move || {
+        shell_execute(&shell_key, shell);
+    });
+
+    loop {
+        let msg = recv_msg(&control, &ci.key);
+        match msg.header["msg_type"].as_str() {
+            Some("shutdown_request") => {
+                let is_restart = msg.content["restart"].as_bool().unwrap_or(false);
+                let re = reply_msg(
+                    &msg,
+                    json!({
+                        "status": "ok",
+                        "restart": is_restart,
+                    }),
+                );
+                send_msg(&control, &ci.key, re);
+                return;
+            }
+            Some(_) | None => {}
+        }
+    }
+
+    // let the OS take care of the other threads...
 }
 
 #[cfg(target_os = "windows")]
