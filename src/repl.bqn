@@ -1,16 +1,20 @@
 {⟨rawInput,rawOutput,rawDisplay,rawClear⟩:
+    IsString ← {
+        (0≡•Type 𝕩)∧⊑(•internal.ElType 𝕩)∊[5,6,7]
+    }
+
     Input ← {
-        "Prompt 𝕨 must be a string"!⊑(•internal.ElType 𝕨)∊[5,6,7]
+        "Prompt must be a string"!IsString 𝕨
         𝕨 RawInput +𝕩
     }
     Output ← {
-        "Name 𝕨 must be a string"!⊑(•internal.ElType 𝕨)∊[5,6,7]
-        "Text 𝕩 must be a string"!⊑(•internal.ElType 𝕩)∊[5,6,7]
+        "Name 𝕨 must be a string"!IsString 𝕨
+        "Text 𝕩 must be a string"!IsString 𝕩
         𝕨 RawOutput 𝕩
     }
     Display ← {
-        "Mimetype 𝕨 must be a string"!⊑(•internal.ElType 𝕨)∊[5,6,7]
-        "Data 𝕩 must be a string"!⊑(•internal.ElType 𝕩)∊[5,6,7]
+        "Mimetype 𝕨 must be a string"!IsString 𝕨
+        "Data 𝕩 must be a string"!IsString 𝕩
         𝕨 RawDisplay 𝕩
     }
     Clear ← {
@@ -19,8 +23,6 @@
         !"Argument must be boolean"
     }
 
-    hasSH ← {⟨"sh"‿(•BQN 𝕩)⟩}⎊⟨⟩"•sh"
-
     Cfg ← {
     ⟨⟩ 𝕊 mode: ⟨"./",".",⟨⟩⟩ 𝕊 mode;
     ⟨path⟩ 𝕊 mode: ⟨path,".",⟨⟩⟩ 𝕊 mode;
@@ -28,45 +30,7 @@
     ⟨path,name,args⟩ 𝕊 mode:
         repl ⇐ mode
 
-        inherited ← ⟨
-            "rebqn"‿•ReBQN
-            "primitives"‿•primitives
-            "while"‿•_while_
-            "wdpath"‿•wdpath
-            
-            "file"‿•file
-            "fchars"‿•FChars
-            "flines"‿•FLines
-            "fbytes"‿•FBytes
-
-            "parsefloat"‿•ParseFloat
-            "repr"‿•Repr
-            "fmt"‿•Fmt
-
-            "ffi"‿•FFI
-
-            "type"‿•Type
-            "glyph"‿•Glyph
-            "decompose"‿•Decompose
-            "ns"‿•ns
-
-            "unixtime"‿•UnixTime
-            "monotime"‿•MonoTime
-            "delay"‿•Delay
-            "timed"‿•_timed
-
-            "math"‿•math
-            "makerand"‿•MakeRand
-            "rand"‿•rand
-            "bit"‿•bit
-            
-            "currenterror"‿•CurrentError
-            "fromutf8"‿•FromUTF8
-            "toutf8"‿•ToUTF8
-            "internal"‿•internal
-        ⟩∾hasSH
-
-        modified ← ⟨
+        system ⇐ {𝕩∾•listSys(¬∘∊/⊣)⊑¨𝕩}⟨
             "path"‿path
             "name"‿name
             "args"‿args
@@ -100,10 +64,6 @@
                 environment ⇐ "jupyter"
             }
         ⟩
-
-        known ← inherited∾modified 
-
-        system ⇐ known∾⟨"listsys"‿((0⊑¨known)∾<"listsys")⟩
     }
 
     Exec ← {
