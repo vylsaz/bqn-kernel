@@ -1,15 +1,21 @@
 mod messaging;
 use cbqn_sys::{
-    bqn_bound, bqn_call1, bqn_eval, bqn_free, bqn_init, bqn_makeBoundFn1, bqn_makeBoundFn2,
-    bqn_makeChar, bqn_makeF64, bqn_makeObjVec, bqn_makeUTF8Str, bqn_pick, bqn_readC32Arr,
-    bqn_readF64, BQNV,
+    bqn_bound, bqn_call1, bqn_call2, bqn_copy, bqn_directArrType, bqn_eval, bqn_free, bqn_init,
+    bqn_makeBoundFn1, bqn_makeBoundFn2, bqn_makeChar, bqn_makeF64, bqn_makeObjVec, bqn_makeUTF8Str,
+    bqn_pick, bqn_readC32Arr, bqn_readF64, bqn_type, BQNElType, BQNElType_elt_c16,
+    BQNElType_elt_c32, BQNElType_elt_c8, BQNV,
 };
 use messaging::{
     format_address, msg_from_parts, msg_to_parts, new_msg, read_connection_file, reply_msg,
     ConnectInfo, Message,
 };
 use serde_json::{json, Value};
-use std::{ffi::c_char, fs::File, sync::Mutex, thread};
+use std::{
+    ffi::c_char,
+    fs::File,
+    sync::{Mutex, Once},
+    thread,
+};
 use widestring::U32String;
 use zmq::Socket;
 
@@ -118,55 +124,65 @@ unsafe fn str_to_bqnv(s: &str) -> BQNV {
     bqn_makeUTF8Str(s.len(), s.as_ptr() as *const c_char)
 }
 
+// consumes a
 unsafe fn str_from_bqnv(a: BQNV) -> String {
     let bound = bqn_bound(a);
     let mut s = Vec::with_capacity(bound);
     s.set_len(bound);
     bqn_readC32Arr(a, s.as_mut_ptr());
+    bqn_free(a);
     U32String::from_vec(s).to_string_lossy()
 }
 
+// consumes a
+unsafe fn f64_from_bqnv(a: BQNV) -> f64 {
+    let f = bqn_readF64(a);
+    bqn_free(a);
+    f
+}
+
 unsafe extern "C" fn bqn_notebook_input(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    let prompt = str_from_bqnv(w);
-    let password = bqn_readF64(x);
     bqn_free(obj);
-    bqn_free(w);
-    bqn_free(x);
+    let prompt = str_from_bqnv(w);
+    let password = f64_from_bqnv(x);
     let result = notebook_input(&prompt, password != 0.0);
     str_to_bqnv(&result)
 }
 
 unsafe extern "C" fn bqn_notebook_output(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    let name = str_from_bqnv(w);
-    let text = str_from_bqnv(x);
-    notebook_output(&name, &text);
     bqn_free(obj);
-    bqn_free(w);
+    let name = str_from_bqnv(w);
+    let text = str_from_bqnv(bqn_copy(x));
+    notebook_output(&name, &text);
     x
 }
 
 unsafe extern "C" fn bqn_notebook_display(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    let mimetype = str_from_bqnv(w);
-    let data = str_from_bqnv(x);
-    notebook_display(&mimetype, &data);
     bqn_free(obj);
-    bqn_free(w);
+    let mimetype = str_from_bqnv(w);
+    let data = str_from_bqnv(bqn_copy(x));
+    notebook_display(&mimetype, &data);
     x
 }
 
 unsafe extern "C" fn bqn_notebook_clear(obj: BQNV, x: BQNV) -> BQNV {
-    let wait = bqn_readF64(x);
-    notebook_output_clear(wait != 0.0);
     bqn_free(obj);
-    bqn_free(x);
+    let wait = f64_from_bqnv(x);
+    notebook_output_clear(wait != 0.0);
     bqn_makeChar(0)
+}
+
+unsafe fn bqn_eval_str(src: &str) -> BQNV {
+    let src = str_to_bqnv(src);
+    let ret = bqn_eval(src);
+    bqn_free(src);
+    ret
 }
 
 unsafe fn bqn_repl_init() -> BQNV {
     bqn_init();
 
-    let replstr = str_to_bqnv(include_str!("./repl.bqn"));
-    let replfun = bqn_eval(replstr);
+    let replfun = bqn_eval_str(include_str!("./repl.bqn"));
 
     let obj = bqn_makeF64(0.0);
 
@@ -179,29 +195,69 @@ unsafe fn bqn_repl_init() -> BQNV {
 
     let repl = bqn_call1(replfun, replarg);
 
-    bqn_free(replstr);
     bqn_free(replarg);
     bqn_free(replfun);
     bqn_free(obj);
+
     repl
 }
 
-unsafe fn bqn_repl_execute(repl: BQNV, code: &str) -> Result<String, String> {
-    let x = str_to_bqnv(code);
-    let r = bqn_call1(repl, x);
+static mut TRAP: BQNV = 0;
+static INIT: Once = Once::new();
+
+// consumes x
+unsafe fn bqn_repl_eval(eval: BQNV, x: BQNV) -> Result<BQNV, String> {
+    INIT.call_once(|| {
+        TRAP = bqn_eval_str("{1‿(𝕎 𝕩)}⎊{0‿(•CurrentError 𝕩)}");
+    });
+
+    let r = bqn_call2(TRAP, eval, x);
     let k = bqn_pick(r, 0);
     let s = bqn_pick(r, 1);
-    let ok = bqn_readF64(k);
-    let st = str_from_bqnv(s);
+    let ok = f64_from_bqnv(k);
+    let ret = if ok != 0.0 {
+        Ok(s)
+    } else {
+        Err(str_from_bqnv(s))
+    };
     bqn_free(x);
     bqn_free(r);
-    bqn_free(k);
-    bqn_free(s);
-    if ok == 0.0 {
-        Err(st)
-    } else {
-        Ok(st)
+    ret
+}
+
+// doesn't consume repl
+unsafe fn bqn_repl_exec(repl: BQNV, code: &str) -> Result<String, String> {
+    let x = bqn_repl_eval(repl, str_to_bqnv(code))?;
+    let disp = bqn_eval_str("•fmt");
+    let r = bqn_repl_eval(disp, x);
+    bqn_free(disp);
+    r.map(|o| str_from_bqnv(o))
+}
+
+// doesn't consume repl
+unsafe fn bqn_repl_exec_with(repl: BQNV, with: &str, code: &str) -> Result<String, String> {
+    let with = bqn_repl_eval(repl, str_to_bqnv(with))?;
+    let x = bqn_repl_eval(with, str_to_bqnv(code)).map_err(|e| {
+        bqn_free(with);
+        e
+    })?;
+    let disp = bqn_repl_eval(with, str_to_bqnv("•fmt")).unwrap_or(bqn_eval_str("•fmt"));
+    let r = bqn_repl_eval(disp, x);
+    bqn_free(with);
+    bqn_free(disp);
+    let a = r?;
+
+    if bqn_type(a) != 0 {
+        bqn_free(a);
+        return Err(format!("•fmt did not return a string"));
     }
+    let eltype: BQNElType = bqn_directArrType(a);
+    if eltype != BQNElType_elt_c8 && eltype != BQNElType_elt_c16 && eltype != BQNElType_elt_c32 {
+        bqn_free(a);
+        return Err(format!("•fmt did not return a string"));
+    }
+
+    Ok(str_from_bqnv(a))
 }
 
 fn shell_execute(key: &str, shell: Socket) {
@@ -241,19 +297,7 @@ fn shell_execute(key: &str, shell: Socket) {
             Some("execute_request") => {
                 execution_count += 1;
 
-                let mut silent = msg.content["silent"].as_bool().unwrap_or(false);
-
                 let mut code = msg.content["code"].as_str().unwrap();
-
-                if code.starts_with(")") {
-                    if code.starts_with(")r") {
-                        silent = true;
-                    }
-
-                    let (_, next) = code.split_once("\n").unwrap_or(("", ""));
-                    code = next;
-                }
-
                 let input = new_msg(
                     &msg,
                     "execute_input",
@@ -264,7 +308,29 @@ fn shell_execute(key: &str, shell: Socket) {
                 );
                 send_iopub(key, input);
 
-                let rslt = unsafe { bqn_repl_execute(repl, code) };
+                let mut silent = msg.content["silent"].as_bool().unwrap_or(false);
+                let mut with = None;
+                let rslt = loop {
+                    if code.starts_with(")") {
+                        let (cmd, next) = code.split_once("\n").unwrap_or(("", ""));
+                        code = next;
+
+                        if cmd.starts_with(")r") {
+                            silent = true;
+                        } else if cmd.starts_with(")use:") {
+                            let (_, r) = cmd.split_once(":").unwrap_or(("", ""));
+                            with = Some(r);
+                        } else {
+                            break Err(format!("Unknown command {cmd}"));
+                        }
+                    } else {
+                        if let Some(with) = with {
+                            break unsafe { bqn_repl_exec_with(repl, with, code) };
+                        } else {
+                            break unsafe { bqn_repl_exec(repl, code) };
+                        }
+                    }
+                };
 
                 let re = if rslt.is_ok() {
                     let succ = rslt.unwrap();

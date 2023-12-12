@@ -74,5 +74,5 @@
     }
 
     r ← •ReBQN ⟨⟩ Cfg "loose"
-    {1‿(•Fmt R 𝕩)}⎊{0‿(•CurrentError 𝕩)}
+    r
 }
