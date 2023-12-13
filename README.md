@@ -28,7 +28,7 @@ Then copy the `./bqn/` folder to one of the folders listed [here](https://jupyte
 - `•Out`, `•Show` and `•GetLine` work.
 - `•platform.environment` will report `"jupyter"`.
 - `•jupyter`:
-  - `GetInput prompt`: `𝕩` is prompt
+  - `GetInput`: `𝕩` is prompt
   - `GetPassword`: `𝕩` is prompt
   - `HTML`: displays html (`𝕩`)
   - `Text`: displays text (`𝕩`)
@@ -45,8 +45,8 @@ Start a cell with `)` to use magic. They need to be on their own lines.
 ```
 )use Func
 ```
-Func needs to be able to accept a (multiline) string as input and output a value.
-Func also needs to be able to evaluate `"•fmt"`.
+`Func` needs to be able to accept a (multiline) string as input and output a value.
+`Func` also needs to be able to evaluate `"•fmt"`.
 
 ## todo
 - [x] running on docker
