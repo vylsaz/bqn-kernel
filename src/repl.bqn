@@ -23,27 +23,10 @@
         !"Argument must be boolean"
     }
 
-    Cfg ← {
-    ⟨⟩ 𝕊 mode: ⟨"./",".",⟨⟩⟩ 𝕊 mode;
-    ⟨path⟩ 𝕊 mode: ⟨path,".",⟨⟩⟩ 𝕊 mode;
-    ⟨path,name⟩ 𝕊 mode: ⟨path,name,⟨⟩⟩ 𝕊 mode;
-    ⟨path,name,args⟩ 𝕊 mode:
-        repl ⇐ mode
+    •ReBQN {
+        repl ⇐ "loose"
 
         system ⇐ {𝕩∾•listSys(¬∘∊/⊣)⊑¨𝕩}⟨
-            "path"‿path
-            "name"‿name
-            "args"‿args
-            "state"‿⟨path,name,args⟩
-            "bqn"‿Exec
-            "import"‿{
-            𝕊 𝕩: ⟨⟩ 𝕊 𝕩;
-            𝕨 𝕊 𝕩:
-                file ← •wdpath •file.At 𝕩
-                path ← •file.Parent file
-                name ← •file.Name file
-                ⟨path,name,𝕨⟩ Exec •FChars file
-            }
             "out"‿{"stdout" Output 𝕩}
             "show"‿{"stdout" Output •Fmt 𝕩, 𝕩}
             "getline"‿{𝕊: "" Input 0}
@@ -65,14 +48,4 @@
             }
         ⟩
     }
-
-    Exec ← {
-    𝕊 𝕩: ⟨⟩ 𝕊 𝕩;
-    𝕨 𝕊 𝕩:
-        r ← •ReBQN 𝕨 Cfg "none"
-        R 𝕩
-    }
-
-    r ← •ReBQN ⟨⟩ Cfg "loose"
-    r
 }

@@ -317,8 +317,8 @@ fn shell_execute(key: &str, shell: Socket) {
 
                         if cmd.starts_with(")r") {
                             silent = true;
-                        } else if cmd.starts_with(")use:") {
-                            let (_, r) = cmd.split_once(":").unwrap_or(("", ""));
+                        } else if cmd.starts_with(")use") {
+                            let (_, r) = cmd.split_once(" ").unwrap_or(("", ""));
                             with = Some(r);
                         } else {
                             break Err(format!("Unknown command {cmd}"));
