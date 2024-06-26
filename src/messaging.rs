@@ -8,6 +8,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use uuid::Uuid;
 
+use zmq::Socket;
+
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Default)]
@@ -21,7 +23,7 @@ pub struct Message {
 
 const DELIM: &[u8] = b"<IDS|MSG>";
 
-pub fn msg_from_parts(parts: Vec<Vec<u8>>, key: &str) -> Message {
+fn msg_from_parts(parts: Vec<Vec<u8>>, key: &str) -> Message {
     let mut i = parts.split(|part| part.as_slice() == DELIM);
     let identities = i.next().unwrap();
     let raw_msgs = i.next().unwrap();
@@ -43,7 +45,7 @@ pub fn msg_from_parts(parts: Vec<Vec<u8>>, key: &str) -> Message {
     }
 }
 
-pub fn msg_to_parts(msg: &Message, key: &str) -> Vec<Vec<u8>> {
+fn msg_to_parts(msg: &Message, key: &str) -> Vec<Vec<u8>> {
     let mut parts: Vec<Vec<u8>> = msg.identities.clone();
     parts.push(DELIM.to_vec());
 
@@ -96,6 +98,16 @@ pub fn reply_msg(msg: &Message, content: Value) -> Message {
     let mut reply = new_msg(msg, &msg_type, content);
     reply.identities = msg.identities.clone();
     reply
+}
+
+pub fn recv_msg(sock: &Socket, key: &str) -> Message {
+    let parts = sock.recv_multipart(0).unwrap();
+    msg_from_parts(parts, key)
+}
+
+pub fn send_msg(sock: &Socket, key: &str, msg: Message) {
+    let parts = msg_to_parts(&msg, key);
+    sock.send_multipart(parts, 0).unwrap();
 }
 
 #[derive(Serialize, Deserialize)]

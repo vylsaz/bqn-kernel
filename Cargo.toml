@@ -6,13 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+base64 = "0.22.1"
 cbqn-sys = "0.2.0"
 chrono = { version = "0.4.31", features = ["serde"] }
 hex = "0.4.3"
 hmac = "0.12.1"
+hound = "3.5.1"
+png = "0.17.13"
 serde = { version = "1.0.192", features = ["derive"] }
 serde_json = "1.0.108"
 sha2 = "0.10.8"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
-widestring = "1.0.2"
 zmq = "0.10.0"

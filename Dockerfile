@@ -11,6 +11,7 @@ RUN cp libcbqn.so /lib/libcbqn.so
 WORKDIR /home/test
 RUN mkdir -p .local/share/jupyter/kernels/bqn
 RUN chown -R test ./.local
+COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 COPY ./src/       ./src/
 COPY ./bqn/       ./bqn/
@@ -18,4 +19,5 @@ RUN cargo run
 RUN cp -r ./bqn/  ./.local/share/jupyter/kernels/
 
 USER test
-CMD ["jupyter", "notebook", "--debug", "--ip", "0.0.0.0"]
+EXPOSE 8888
+CMD ["jupyter", "notebook", "--ip", "0.0.0.0"]

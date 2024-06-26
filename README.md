@@ -18,13 +18,17 @@ Then run:
 ```
 cargo run
 ```
-Then copy the `./bqn/` folder to one of the folders listed [here](https://jupyter-client.readthedocs.io/en/latest/kernels.html#kernel-specs).
+Finally, copy the `./bqn/` folder to one of the folders listed [here](https://jupyter-client.readthedocs.io/en/latest/kernels.html#kernel-specs).
 
 (`kernel.js`, `bqn.css` and `BQN386.ttf` only work for jupyter classic, so jupyter lab users can delete them.)
 
 ## quirks 
 
+### kernel
+The kernel cannot be interrupted.
+
 ### system values
+- `•Exit` doesn't work.
 - `•Out`, `•Show` and `•GetLine` work.
 - `•platform.environment` will report `"jupyter"`.
 - `•jupyter`:
@@ -33,6 +37,9 @@ Then copy the `./bqn/` folder to one of the folders listed [here](https://jupyte
   - `HTML`: displays html (`𝕩`)
   - `Text`: displays text (`𝕩`)
   - `Clear`: clears the display
+  - `Image`: displays image (`𝕩` of rank 2 or 3, `0.0`-`1.0` float values)
+  - `Audio`: displays sound (`𝕩` of rank 1 or 2, `¯1.0`-`1.0` float values) with sample rate of `𝕨` or `audioFreq`
+  - `audioFreq`: 44100
 
 ### cell magic
 Start a cell with `)` to use magic. They need to be on their own lines.
@@ -47,6 +54,16 @@ Start a cell with `)` to use magic. They need to be on their own lines.
 ```
 `Func` needs to be able to accept a (multiline) string as input and output a value.
 `Func` also needs to be able to evaluate `"•fmt"`.
+#### Display the final result as an image
+```
+)image
+```
+Calls `•jupyter.Image` on the final result
+#### Display the final result as an audio
+```
+)audio
+```
+Calls `•jupyter.Audio` on the final result
 
 ## todo
 - [x] running on docker
@@ -59,6 +76,6 @@ Start a cell with `)` to use magic. They need to be on their own lines.
 
 maybe (big MAYBE)
 - [ ] plots
-- [ ] graphics
-- [ ] audio
+- [x] image
+- [x] audio
 - [ ] widgets

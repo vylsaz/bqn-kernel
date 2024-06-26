@@ -1,13 +1,13 @@
+mod media;
 mod messaging;
 use cbqn_sys::{
-    bqn_bound, bqn_call1, bqn_call2, bqn_copy, bqn_directArrType, bqn_eval, bqn_free, bqn_init,
-    bqn_makeBoundFn1, bqn_makeBoundFn2, bqn_makeChar, bqn_makeF64, bqn_makeObjVec, bqn_makeUTF8Str,
-    bqn_pick, bqn_readC32Arr, bqn_readF64, bqn_type, BQNElType, BQNElType_elt_c16,
-    BQNElType_elt_c32, BQNElType_elt_c8, BQNV,
+    bqn_bound, bqn_call1, bqn_call2, bqn_copy, bqn_eval, bqn_free, bqn_init, bqn_makeBoundFn1,
+    bqn_makeBoundFn2, bqn_makeChar, bqn_makeF64, bqn_makeObjVec, bqn_makeUTF8Str, bqn_pick,
+    bqn_readC8Arr, bqn_readF64, bqn_readF64Arr, bqn_shape, BQNV,
 };
+use media::{base64_png, base64_wav};
 use messaging::{
-    format_address, msg_from_parts, msg_to_parts, new_msg, read_connection_file, reply_msg,
-    ConnectInfo, Message,
+    format_address, new_msg, read_connection_file, recv_msg, reply_msg, send_msg, Message,
 };
 use serde_json::{json, Value};
 use std::{
@@ -16,18 +16,7 @@ use std::{
     sync::{Mutex, Once},
     thread,
 };
-use widestring::U32String;
 use zmq::Socket;
-
-fn recv_msg(sock: &Socket, key: &str) -> Message {
-    let parts = sock.recv_multipart(0).unwrap();
-    msg_from_parts(parts, key)
-}
-
-fn send_msg(sock: &Socket, key: &str, msg: Message) {
-    let parts = msg_to_parts(&msg, key);
-    sock.send_multipart(parts, 0).unwrap();
-}
 
 fn kernel_info() -> Value {
     json!({
@@ -41,7 +30,7 @@ fn kernel_info() -> Value {
             "mimetype": "text/bqn",
             "file_extension": ".bqn"
         },
-        "banner": "Hello!",
+        "banner": "BQN kernel",
     })
 }
 
@@ -124,14 +113,24 @@ unsafe fn str_to_bqnv(s: &str) -> BQNV {
     bqn_makeUTF8Str(s.len(), s.as_ptr() as *const c_char)
 }
 
+static mut TO_UTF8: BQNV = 0;
+static INIT_TO_UTF8: Once = Once::new();
+
 // consumes a
 unsafe fn str_from_bqnv(a: BQNV) -> String {
-    let bound = bqn_bound(a);
-    let mut s = Vec::with_capacity(bound);
-    s.set_len(bound);
-    bqn_readC32Arr(a, s.as_mut_ptr());
+    INIT_TO_UTF8.call_once(|| {
+        TO_UTF8 = bqn_eval_str("•ToUTF8");
+    });
+
+    let utf8 = bqn_call1(TO_UTF8, a);
+    let bound = bqn_bound(utf8);
+    let mut bytes = Vec::with_capacity(bound);
+    bytes.set_len(bound);
+    bqn_readC8Arr(utf8, bytes.as_mut_ptr());
     bqn_free(a);
-    U32String::from_vec(s).to_string_lossy()
+    bqn_free(utf8);
+
+    String::from_utf8(bytes).expect("Should be valid UTF8")
 }
 
 // consumes a
@@ -172,6 +171,51 @@ unsafe extern "C" fn bqn_notebook_clear(obj: BQNV, x: BQNV) -> BQNV {
     bqn_makeChar(0)
 }
 
+unsafe extern "C" fn bqn_notebook_png(obj: BQNV, x: BQNV) -> BQNV {
+    bqn_free(obj);
+    // rank has to be = 3
+    let mut shape = [0usize; 3];
+    bqn_shape(x, shape.as_mut_ptr());
+    let height = shape[0] as u32;
+    let width = shape[1] as u32;
+    let channels = shape[2] as u32;
+
+    let bound = bqn_bound(x);
+    let mut img = Vec::with_capacity(bound);
+    img.set_len(bound);
+    bqn_readF64Arr(x, img.as_mut_ptr());
+    let data: Vec<u8> = img.iter().map(|&f| (f * 255.0) as u8).collect();
+    let png = base64_png(width, height, channels, &data);
+    let ret = match png {
+        Ok(png) => bqn_makeObjVec(2, [bqn_makeF64(1.0), str_to_bqnv(&png)].as_ptr()),
+        Err(err) => bqn_makeObjVec(2, [bqn_makeF64(0.0), str_to_bqnv(&err)].as_ptr()),
+    };
+    bqn_free(x);
+    ret
+}
+
+unsafe extern "C" fn bqn_notebook_wav(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
+    bqn_free(obj);
+    // rank has to be = 2
+    let mut shape = [0usize; 2];
+    bqn_shape(x, shape.as_mut_ptr());
+    let channels = shape[1] as u16;
+
+    let sample_rate = f64_from_bqnv(w) as u32;
+
+    let bound = bqn_bound(x);
+    let mut aud = Vec::with_capacity(bound);
+    aud.set_len(bound);
+    bqn_readF64Arr(x, aud.as_mut_ptr());
+    let wav = base64_wav(channels, sample_rate, &aud);
+    let ret = match wav {
+        Ok(wav) => bqn_makeObjVec(2, [bqn_makeF64(1.0), str_to_bqnv(&wav)].as_ptr()),
+        Err(err) => bqn_makeObjVec(2, [bqn_makeF64(0.0), str_to_bqnv(&err)].as_ptr()),
+    };
+    bqn_free(x);
+    ret
+}
+
 unsafe fn bqn_eval_str(src: &str) -> BQNV {
     let src = str_to_bqnv(src);
     let ret = bqn_eval(src);
@@ -186,11 +230,14 @@ unsafe fn bqn_repl_init() -> BQNV {
 
     let obj = bqn_makeF64(0.0);
 
-    let raw_input = bqn_makeBoundFn2(Some(bqn_notebook_input), obj);
-    let raw_output = bqn_makeBoundFn2(Some(bqn_notebook_output), obj);
-    let raw_display = bqn_makeBoundFn2(Some(bqn_notebook_display), obj);
-    let raw_clear = bqn_makeBoundFn1(Some(bqn_notebook_clear), obj);
-    let arg = [raw_input, raw_output, raw_display, raw_clear];
+    let arg = [
+        bqn_makeBoundFn2(Some(bqn_notebook_input), obj),
+        bqn_makeBoundFn2(Some(bqn_notebook_output), obj),
+        bqn_makeBoundFn2(Some(bqn_notebook_display), obj),
+        bqn_makeBoundFn1(Some(bqn_notebook_clear), obj),
+        bqn_makeBoundFn1(Some(bqn_notebook_png), obj),
+        bqn_makeBoundFn2(Some(bqn_notebook_wav), obj),
+    ];
     let replarg = bqn_makeObjVec(arg.len(), arg.as_ptr());
 
     let repl = bqn_call1(replfun, replarg);
@@ -203,11 +250,11 @@ unsafe fn bqn_repl_init() -> BQNV {
 }
 
 static mut TRAP: BQNV = 0;
-static INIT: Once = Once::new();
+static INIT_TRAP: Once = Once::new();
 
-// consumes x
+// consumes all
 unsafe fn bqn_repl_eval(eval: BQNV, x: BQNV) -> Result<BQNV, String> {
-    INIT.call_once(|| {
+    INIT_TRAP.call_once(|| {
         TRAP = bqn_eval_str("{1‿(𝕎 𝕩)}⎊{0‿(•CurrentError 𝕩)}");
     });
 
@@ -220,50 +267,173 @@ unsafe fn bqn_repl_eval(eval: BQNV, x: BQNV) -> Result<BQNV, String> {
     } else {
         Err(str_from_bqnv(s))
     };
+    bqn_free(eval);
     bqn_free(x);
     bqn_free(r);
     ret
 }
 
-// doesn't consume repl
-unsafe fn bqn_repl_exec(repl: BQNV, code: &str) -> Result<String, String> {
+unsafe fn bqn_repl_exec(
+    repl: BQNV,
+    post: BQNV,
+    silent: bool,
+    code: &str,
+) -> Result<String, String> {
     let x = bqn_repl_eval(repl, str_to_bqnv(code))?;
-    let disp = bqn_eval_str("•fmt");
-    let r = bqn_repl_eval(disp, x);
-    bqn_free(disp);
-    r.map(|o| str_from_bqnv(o))
+    let r = bqn_repl_eval(post, x)?;
+    if silent {
+        bqn_free(r);
+        Ok("".to_owned())
+    } else {
+        Ok(str_from_bqnv(r))
+    }
 }
 
-// doesn't consume repl
-unsafe fn bqn_repl_exec_with(repl: BQNV, with: &str, code: &str) -> Result<String, String> {
+unsafe fn bqn_repl_exec_with(
+    repl: BQNV,
+    post: BQNV,
+    silent: bool,
+    code: &str,
+    with: &str,
+) -> Result<String, String> {
     let with = bqn_repl_eval(repl, str_to_bqnv(with))?;
-    let x = bqn_repl_eval(with, str_to_bqnv(code)).map_err(|e| {
-        bqn_free(with);
-        e
-    })?;
-    let disp = bqn_repl_eval(with, str_to_bqnv("•fmt")).unwrap_or(bqn_eval_str("•fmt"));
-    let r = bqn_repl_eval(disp, x);
-    bqn_free(with);
-    bqn_free(disp);
-    let a = r?;
+    let post = if silent {
+        post
+    } else {
+        let p = bqn_repl_eval(bqn_copy(with), str_to_bqnv("•fmt"));
+        if let Ok(p) = p {
+            bqn_free(post);
+            p
+        } else {
+            post
+        }
+    };
+    bqn_repl_exec(with, post, silent, code)
+}
 
-    if bqn_type(a) != 0 {
-        bqn_free(a);
-        return Err(format!("•fmt did not return a string"));
+unsafe fn bqn_completion(comp: BQNV, code: &str, pos: f64) -> (Vec<String>, i64, i64) {
+    let code = str_to_bqnv(code);
+    let pos = bqn_makeF64(pos);
+    let res = bqn_call2(comp, code, pos);
+    let vec = bqn_pick(res, 0);
+    let cursor_start = f64_from_bqnv(bqn_pick(res, 1)) as i64;
+    let cursor_end = f64_from_bqnv(bqn_pick(res, 2)) as i64;
+
+    let bound = bqn_bound(vec);
+    let mut matches = Vec::with_capacity(bound);
+    for i in 0..bound {
+        let s = str_from_bqnv(bqn_pick(vec, i));
+        matches.push(s);
     }
-    let eltype: BQNElType = bqn_directArrType(a);
-    if eltype != BQNElType_elt_c8 && eltype != BQNElType_elt_c16 && eltype != BQNElType_elt_c32 {
-        bqn_free(a);
-        return Err(format!("•fmt did not return a string"));
+    bqn_free(vec);
+
+    bqn_free(code);
+    bqn_free(pos);
+    bqn_free(res);
+
+    (matches, cursor_start, cursor_end)
+}
+
+#[derive(PartialEq)]
+enum BQNBrackets {
+    Paren,  // ()
+    Square, // []
+    Curly,  // {}
+    Vector, // ⟨⟩
+}
+
+macro_rules! left_bracket {
+    ($bracket:ident, $stack:ident) => {
+        $stack.push(BQNBrackets::$bracket)
+    };
+}
+macro_rules! right_bracket {
+    ($bracket:ident, $stack:ident) => {{
+        let top = $stack.pop();
+        if let Some(top) = top {
+            if top != BQNBrackets::$bracket {
+                return "invalid";
+            }
+        } else {
+            return "invalid";
+        }
+    }};
+}
+fn bqn_is_complete(code: &str) -> &str {
+    if code.starts_with(")off") {
+        return "complete";
     }
 
-    Ok(str_from_bqnv(a))
+    let mut code = code;
+    while code.starts_with(")") {
+        (_, code) = code.split_once("\n").unwrap_or(("", ""));
+        if code.is_empty() {
+            return "incomplete";
+        }
+    }
+
+    let mut n_char = 0i8;
+    let mut in_str = false;
+    let mut stack = Vec::new();
+    for c in code.chars() {
+        if n_char == 1 {
+            n_char = 2;
+            continue;
+        }
+        if in_str && c != '"' {
+            continue;
+        }
+        match c {
+            '(' => left_bracket!(Paren, stack),
+            ')' => right_bracket!(Paren, stack),
+            '[' => left_bracket!(Square, stack),
+            ']' => right_bracket!(Square, stack),
+            '{' => left_bracket!(Curly, stack),
+            '}' => right_bracket!(Curly, stack),
+            '⟨' => left_bracket!(Vector, stack),
+            '⟩' => right_bracket!(Vector, stack),
+            '\'' => {
+                if n_char == 0 {
+                    n_char = 1;
+                } else if n_char == 2 {
+                    n_char = 0;
+                }
+            }
+            '"' => {
+                in_str = !in_str;
+            }
+            _ => {}
+        }
+    }
+    if in_str {
+        "incomplete"
+    } else if stack.is_empty() {
+        "complete"
+    } else {
+        "incomplete"
+    }
 }
 
 fn shell_execute(key: &str, shell: Socket) {
     let mut execution_count: i32 = 0;
 
     let repl = unsafe { bqn_repl_init() };
+
+    let comp = unsafe {
+        bqn_repl_eval(
+            bqn_copy(repl),
+            str_to_bqnv(include_str!("./completion.bqn")),
+        )
+        .expect("Completion should work")
+    };
+
+    let fmt = unsafe { bqn_eval_str("•fmt") };
+    let img = unsafe {
+        bqn_repl_eval(bqn_copy(repl), str_to_bqnv("•jupyter.image")).expect("Png should work")
+    };
+    let aud = unsafe {
+        bqn_repl_eval(bqn_copy(repl), str_to_bqnv("•jupyter.audio")).expect("Wav should work")
+    };
 
     loop {
         let msg = recv_msg(&shell, key);
@@ -308,11 +478,15 @@ fn shell_execute(key: &str, shell: Socket) {
                 );
                 send_iopub(key, input);
 
+                // this field is deprecated according to the docs
+                let mut payload: Vec<Value> = Vec::new();
+
                 let mut silent = msg.content["silent"].as_bool().unwrap_or(false);
+                let mut post = None;
                 let mut with = None;
                 let rslt = loop {
                     if code.starts_with(")") {
-                        let (cmd, next) = code.split_once("\n").unwrap_or(("", ""));
+                        let (cmd, next) = code.split_once("\n").unwrap_or((code, ""));
                         code = next;
 
                         if cmd.starts_with(")r") {
@@ -320,14 +494,31 @@ fn shell_execute(key: &str, shell: Socket) {
                         } else if cmd.starts_with(")use") {
                             let (_, r) = cmd.split_once(" ").unwrap_or(("", ""));
                             with = Some(r);
+                        } else if cmd.starts_with(")off") {
+                            payload.push(json!({
+                                "source": "ask_exit",
+                                "keepkernel": false,
+                            }));
+                        } else if cmd.starts_with(")image") {
+                            silent = true;
+                            post = Some(unsafe { bqn_copy(img) });
+                        } else if cmd.starts_with(")audio") {
+                            silent = true;
+                            post = Some(unsafe { bqn_copy(aud) });
                         } else {
                             break Err(format!("Unknown command {cmd}"));
                         }
+                    } else if code.trim().is_empty() {
+                        silent = true;
+                        break Ok("".to_owned());
                     } else {
+                        let post = post.unwrap_or(unsafe { bqn_copy(fmt) });
                         if let Some(with) = with {
-                            break unsafe { bqn_repl_exec_with(repl, with, code) };
+                            break unsafe {
+                                bqn_repl_exec_with(bqn_copy(repl), post, silent, code, with)
+                            };
                         } else {
-                            break unsafe { bqn_repl_exec(repl, code) };
+                            break unsafe { bqn_repl_exec(bqn_copy(repl), post, silent, code) };
                         }
                     }
                 };
@@ -354,6 +545,7 @@ fn shell_execute(key: &str, shell: Socket) {
                         json!({
                             "status": "ok",
                             "execution_count": execution_count,
+                            "payload": payload,
                         }),
                     )
                 } else {
@@ -382,13 +574,44 @@ fn shell_execute(key: &str, shell: Socket) {
                 };
                 send_msg(&shell, key, re);
             }
+            Some("complete_request") => {
+                let code = msg.content["code"].as_str().unwrap();
+                let pos = msg.content["cursor_pos"].as_f64().unwrap();
+
+                let (matches, cursor_start, cursor_end) =
+                    unsafe { bqn_completion(comp, code, pos) };
+
+                let re = reply_msg(
+                    &msg,
+                    json!({
+                        "status": "ok",
+                        "matches": matches,
+                        "cursor_start": cursor_start,
+                        "cursor_end": cursor_end,
+                        "metadata": {},
+                    }),
+                );
+                send_msg(&shell, key, re);
+            }
+            Some("is_complete_request") => {
+                let code = msg.content["code"].as_str().unwrap();
+                let re = reply_msg(
+                    &msg,
+                    json!({
+                        "status": bqn_is_complete(code),
+                    }),
+                );
+                send_msg(&shell, key, re);
+            }
             Some(_) | None => {}
         }
         send_iopub(key, idle);
     }
 }
 
-fn run(ci: ConnectInfo) {
+fn run(filename: String) {
+    let ci = read_connection_file(filename);
+
     let ctx = zmq::Context::new();
 
     let hb = ctx.socket(zmq::REP).unwrap();
@@ -485,8 +708,7 @@ fn main() {
         match arg.as_str() {
             "-f" => {
                 let filename = args.next().expect("Missing connection file");
-                let ci = read_connection_file(filename);
-                return run(ci);
+                return run(filename);
             }
             _ => panic!("Unknown option"),
         }

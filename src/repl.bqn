@@ -1,6 +1,9 @@
-{⟨rawInput,rawOutput,rawDisplay,rawClear⟩:
+{⟨rawInput,rawOutput,rawDisplay,rawClear,rawPng, rawWav⟩:
     IsString ← {
         (0≡•Type 𝕩)∧⊑(•internal.ElType 𝕩)∊[5,6,7]
+    }
+    IsNumericArray ← {
+        (0≡•Type 𝕩)∧(•internal.ElType 𝕩)<5
     }
 
     Input ← {
@@ -22,6 +25,24 @@
         1: RawClear 1;
         !"Argument must be boolean"
     }
+    Png ← {𝕊 x:
+        "Image must be a numeric array"!IsNumericArray x
+        r ← =x
+        "Rank of image must be 2 or 3"!∨´r=2‿3
+        ⟨h,w,c⟩ ← ≢i ← {r≡2? ⍉≍x; x}
+        "Color channels of image must be between 1 and 4"!∨´c=1‿2‿3‿4
+        ⟨ok, s⟩ ← RawPng i 
+        s!ok, s
+    }
+    Wav ← {w 𝕊 x:
+        "Sample rate must be a number"!1≡•Type w
+        "Sound must be a numeric array"!IsNumericArray x
+        r ← =x
+        "Rank of sound must be 1 or 2"!∨´r=1‿2
+        a ← ⍉{r≡1? ≍x; x}
+        ⟨ok, s⟩ ← w RawWav a
+        s!ok, s
+    }
 
     •ReBQN {
         repl ⇐ "loose"
@@ -39,12 +60,27 @@
                 Text ⇐ {"text/plain" Display 𝕩}
                 Display ⇐ Display
                 Clear ⇐ Clear
+                Image ⇐ {
+                    p ← Png 𝕩
+                    h ← "<div><img src=""data:image/png;base64,"∾p∾""" /></div>"
+                    HTML h, @
+                }
+                audioFreq ⇐ 44100
+                Audio ⇐ {𝕊 𝕩: audioFreq 𝕊 𝕩;
+                    w ← 𝕨 Wav 𝕩
+                    h ← "<div><audio controls src=""data:audio/wav;base64,"∾w∾""" /></div>"
+                    HTML h, @
+                }
             }
             "platform"‿{
                 os ⇐ •platform.os
                 bqn ⇐ •platform.bqn
                 cpu ⇐ •platform.cpu
                 environment ⇐ "jupyter"
+            }
+            "exit"‿{𝕊: 
+                msg ← "•Exit is disabled for jupyter notebook. "
+                !msg∾"If in console, use )off to exit"
             }
         ⟩
     }
