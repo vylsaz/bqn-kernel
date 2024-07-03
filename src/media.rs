@@ -16,7 +16,6 @@ pub fn base64_png(width: u32, height: u32, channels: u32, data: &[u8]) -> Result
         enc.set_depth(png::BitDepth::Eight);
         enc.set_color(color);
         enc.set_compression(png::Compression::Fast);
-        enc.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
         let mut writer = enc.write_header().map_err(|e| format!("PNG: {e}"))?;
         writer
             .write_image_data(data)
@@ -38,7 +37,9 @@ pub fn base64_wav(channels: u16, sample_rate: u32, samples: &[f64]) -> Result<St
         };
         let mut writer = WavWriter::new(&mut bytes, spec).unwrap();
         for &s in samples {
-            writer.write_sample(s as f32).map_err(|e| format!("WAV: {e}"))?;
+            writer
+                .write_sample(s as f32)
+                .map_err(|e| format!("WAV: {e}"))?;
         }
         writer.finalize().map_err(|e| format!("WAV: {e}"))?;
     }

@@ -1,21 +1,13 @@
+mod bqn;
 mod media;
 mod messaging;
-use cbqn_sys::{
-    bqn_bound, bqn_call1, bqn_call2, bqn_copy, bqn_eval, bqn_free, bqn_init, bqn_makeBoundFn1,
-    bqn_makeBoundFn2, bqn_makeChar, bqn_makeF64, bqn_makeObjVec, bqn_makeUTF8Str, bqn_pick,
-    bqn_readC8Arr, bqn_readF64, bqn_readF64Arr, bqn_shape, BQNV,
-};
+use bqn::{BQNValue, BQNV};
 use media::{base64_png, base64_wav};
 use messaging::{
     format_address, new_msg, read_connection_file, recv_msg, reply_msg, send_msg, Message,
 };
 use serde_json::{json, Value};
-use std::{
-    ffi::c_char,
-    fs::File,
-    sync::{Mutex, Once},
-    thread,
-};
+use std::{fs::File, thread};
 use zmq::Socket;
 
 fn kernel_info() -> Value {
@@ -34,19 +26,43 @@ fn kernel_info() -> Value {
     })
 }
 
-static KEY: Mutex<Option<String>> = Mutex::new(None);
-static LAST_MSG: Mutex<Option<Message>> = Mutex::new(None);
+struct Context {
+    key: String,
+    last_msg: Message,
+    iopub: Socket,
+    stdin: Socket,
+}
+impl Context {
+    fn update_msg(&mut self, new_msg: Message) {
+        self.last_msg = new_msg;
+    }
 
-static IOPUB: Mutex<Option<Socket>> = Mutex::new(None);
-static STDIN: Mutex<Option<Socket>> = Mutex::new(None);
+    fn send_iopub(&self, msg: Message) {
+        send_msg(&self.iopub, &self.key, msg);
+    }
+    fn reply_iopub(&self, msg_type: &str, content: Value) {
+        let msg = &self.last_msg;
+        let re = new_msg(msg, msg_type, content);
+        self.send_iopub(re);
+    }
 
-fn notebook_input(prompt: &str, password: bool) -> String {
-    let key = KEY.lock().unwrap();
-    let key = key.as_ref().unwrap();
-    let msg = LAST_MSG.lock().unwrap();
-    let msg = msg.as_ref().unwrap();
-    let stdin = STDIN.lock().unwrap();
-    let stdin = stdin.as_ref().unwrap();
+    fn as_bqnvalue(&mut self) -> BQNValue {
+        let ptr = self as *mut Self;
+        BQNValue::from(ptr)
+    }
+
+    fn from_bqnvalue(value: &BQNValue) -> &Self {
+        unsafe {
+            let ptr = value.to_ptr::<Context>();
+            ptr.as_ref().unwrap()
+        }
+    }
+}
+
+fn notebook_input(ctx: &Context, prompt: &str, password: bool) -> String {
+    let key = &ctx.key;
+    let msg = &ctx.last_msg;
+    let stdin = &ctx.stdin;
 
     let mut input_req = new_msg(
         msg,
@@ -56,7 +72,7 @@ fn notebook_input(prompt: &str, password: bool) -> String {
             "password": password,
         }),
     );
-    input_req.identities = msg.identities.clone();
+    input_req.identities.clone_from(&msg.identities);
     send_msg(stdin, key, input_req);
 
     let input_rep = recv_msg(stdin, key);
@@ -67,24 +83,8 @@ fn notebook_input(prompt: &str, password: bool) -> String {
     input.to_owned()
 }
 
-fn send_iopub(key: &str, msg: Message) {
-    let iopub = IOPUB.lock().unwrap();
-    let iopub = iopub.as_ref().unwrap();
-    send_msg(iopub, key, msg);
-}
-
-fn reply_iopub(msg_type: &str, content: Value) {
-    let key = KEY.lock().unwrap();
-    let key = key.as_ref().unwrap();
-    let msg = LAST_MSG.lock().unwrap();
-    let msg = msg.as_ref().unwrap();
-
-    let re = new_msg(msg, msg_type, content);
-    send_iopub(key, re);
-}
-
-fn notebook_output(name: &str, text: &str) {
-    reply_iopub(
+fn notebook_output(ctx: &Context, name: &str, text: &str) {
+    ctx.reply_iopub(
         "stream",
         json!({
             "name": name,
@@ -93,8 +93,8 @@ fn notebook_output(name: &str, text: &str) {
     );
 }
 
-fn notebook_display(mimetype: &str, data: &str) {
-    reply_iopub(
+fn notebook_display(ctx: &Context, mimetype: &str, data: &str) {
+    ctx.reply_iopub(
         "display_data",
         json!({
             "data": {
@@ -105,231 +105,146 @@ fn notebook_display(mimetype: &str, data: &str) {
     );
 }
 
-fn notebook_output_clear(wait: bool) {
-    reply_iopub("clear_output", json!({"wait": wait}));
-}
-
-unsafe fn str_to_bqnv(s: &str) -> BQNV {
-    bqn_makeUTF8Str(s.len(), s.as_ptr() as *const c_char)
-}
-
-static mut TO_UTF8: BQNV = 0;
-static INIT_TO_UTF8: Once = Once::new();
-
-// consumes a
-unsafe fn str_from_bqnv(a: BQNV) -> String {
-    INIT_TO_UTF8.call_once(|| {
-        TO_UTF8 = bqn_eval_str("•ToUTF8");
-    });
-
-    let utf8 = bqn_call1(TO_UTF8, a);
-    let bound = bqn_bound(utf8);
-    let mut bytes = Vec::with_capacity(bound);
-    bytes.set_len(bound);
-    bqn_readC8Arr(utf8, bytes.as_mut_ptr());
-    bqn_free(a);
-    bqn_free(utf8);
-
-    String::from_utf8(bytes).expect("Should be valid UTF8")
-}
-
-// consumes a
-unsafe fn f64_from_bqnv(a: BQNV) -> f64 {
-    let f = bqn_readF64(a);
-    bqn_free(a);
-    f
+fn notebook_output_clear(ctx: &Context, wait: bool) {
+    ctx.reply_iopub("clear_output", json!({"wait": wait}));
 }
 
 unsafe extern "C" fn bqn_notebook_input(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    bqn_free(obj);
-    let prompt = str_from_bqnv(w);
-    let password = f64_from_bqnv(x);
-    let result = notebook_input(&prompt, password != 0.0);
-    str_to_bqnv(&result)
+    let o = BQNValue::from(obj);
+    let w = BQNValue::from(w);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue(&o);
+    let prompt = w.to_string();
+    let password = x.to_f64();
+    let result = notebook_input(ctx, &prompt, password != 0.0);
+    BQNValue::from(result).copy()
 }
 
 unsafe extern "C" fn bqn_notebook_output(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    bqn_free(obj);
-    let name = str_from_bqnv(w);
-    let text = str_from_bqnv(bqn_copy(x));
-    notebook_output(&name, &text);
-    x
+    let o = BQNValue::from(obj);
+    let w = BQNValue::from(w);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue(&o);
+    let name = w.to_string();
+    let text = x.to_string();
+    notebook_output(ctx, &name, &text);
+    x.copy()
 }
 
 unsafe extern "C" fn bqn_notebook_display(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    bqn_free(obj);
-    let mimetype = str_from_bqnv(w);
-    let data = str_from_bqnv(bqn_copy(x));
-    notebook_display(&mimetype, &data);
-    x
+    let o = BQNValue::from(obj);
+    let w = BQNValue::from(w);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue(&o);
+    let mimetype = w.to_string();
+    let data = x.to_string();
+    notebook_display(ctx, &mimetype, &data);
+    x.copy()
 }
 
 unsafe extern "C" fn bqn_notebook_clear(obj: BQNV, x: BQNV) -> BQNV {
-    bqn_free(obj);
-    let wait = f64_from_bqnv(x);
-    notebook_output_clear(wait != 0.0);
-    bqn_makeChar(0)
+    let o = BQNValue::from(obj);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue(&o);
+    let wait = x.to_f64();
+    notebook_output_clear(ctx, wait != 0.0);
+    BQNValue::null().copy()
 }
 
 unsafe extern "C" fn bqn_notebook_png(obj: BQNV, x: BQNV) -> BQNV {
-    bqn_free(obj);
+    let _ = BQNValue::from(obj);
+    let x = BQNValue::from(x);
     // rank has to be = 3
-    let mut shape = [0usize; 3];
-    bqn_shape(x, shape.as_mut_ptr());
+    let shape = x.shape();
     let height = shape[0] as u32;
     let width = shape[1] as u32;
     let channels = shape[2] as u32;
 
-    let bound = bqn_bound(x);
-    let mut img = Vec::with_capacity(bound);
-    img.set_len(bound);
-    bqn_readF64Arr(x, img.as_mut_ptr());
+    let img = x.to_f64_vec();
     let data: Vec<u8> = img.iter().map(|&f| (f * 255.0) as u8).collect();
     let png = base64_png(width, height, channels, &data);
     let ret = match png {
-        Ok(png) => bqn_makeObjVec(2, [bqn_makeF64(1.0), str_to_bqnv(&png)].as_ptr()),
-        Err(err) => bqn_makeObjVec(2, [bqn_makeF64(0.0), str_to_bqnv(&err)].as_ptr()),
+        Ok(png) => BQNValue::from([BQNValue::from(1.0), BQNValue::from(png)]),
+        Err(err) => BQNValue::from([BQNValue::from(0.0), BQNValue::from(err)]),
     };
-    bqn_free(x);
-    ret
+    ret.copy()
 }
 
 unsafe extern "C" fn bqn_notebook_wav(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
-    bqn_free(obj);
+    let _ = BQNValue::from(obj);
+    let w = BQNValue::from(w);
+    let x = BQNValue::from(x);
     // rank has to be = 2
-    let mut shape = [0usize; 2];
-    bqn_shape(x, shape.as_mut_ptr());
+    let shape = x.shape();
     let channels = shape[1] as u16;
 
-    let sample_rate = f64_from_bqnv(w) as u32;
+    let sample_rate = w.to_f64() as u32;
 
-    let bound = bqn_bound(x);
-    let mut aud = Vec::with_capacity(bound);
-    aud.set_len(bound);
-    bqn_readF64Arr(x, aud.as_mut_ptr());
+    let aud = x.to_f64_vec();
     let wav = base64_wav(channels, sample_rate, &aud);
     let ret = match wav {
-        Ok(wav) => bqn_makeObjVec(2, [bqn_makeF64(1.0), str_to_bqnv(&wav)].as_ptr()),
-        Err(err) => bqn_makeObjVec(2, [bqn_makeF64(0.0), str_to_bqnv(&err)].as_ptr()),
+        Ok(wav) => BQNValue::from([BQNValue::from(1.0), BQNValue::from(wav)]),
+        Err(err) => BQNValue::from([BQNValue::from(0.0), BQNValue::from(err)]),
     };
-    bqn_free(x);
-    ret
+    ret.copy()
 }
 
-unsafe fn bqn_eval_str(src: &str) -> BQNV {
-    let src = str_to_bqnv(src);
-    let ret = bqn_eval(src);
-    bqn_free(src);
-    ret
+fn bqn_repl_init(ctx: &mut Context) -> BQNValue {
+    BQNValue::init();
+
+    let replfun = BQNValue::eval(include_str!("./repl.bqn"));
+
+    let obj = ctx.as_bqnvalue();
+    let replarg = BQNValue::from([
+        BQNValue::fn2(bqn_notebook_input, &obj),
+        BQNValue::fn2(bqn_notebook_output, &obj),
+        BQNValue::fn2(bqn_notebook_display, &obj),
+        BQNValue::fn1(bqn_notebook_clear, &obj),
+        BQNValue::fn1(bqn_notebook_png, &obj),
+        BQNValue::fn2(bqn_notebook_wav, &obj),
+    ]);
+
+    BQNValue::call1(&replfun, &replarg)
 }
 
-unsafe fn bqn_repl_init() -> BQNV {
-    bqn_init();
-
-    let replfun = bqn_eval_str(include_str!("./repl.bqn"));
-
-    let obj = bqn_makeF64(0.0);
-
-    let arg = [
-        bqn_makeBoundFn2(Some(bqn_notebook_input), obj),
-        bqn_makeBoundFn2(Some(bqn_notebook_output), obj),
-        bqn_makeBoundFn2(Some(bqn_notebook_display), obj),
-        bqn_makeBoundFn1(Some(bqn_notebook_clear), obj),
-        bqn_makeBoundFn1(Some(bqn_notebook_png), obj),
-        bqn_makeBoundFn2(Some(bqn_notebook_wav), obj),
-    ];
-    let replarg = bqn_makeObjVec(arg.len(), arg.as_ptr());
-
-    let repl = bqn_call1(replfun, replarg);
-
-    bqn_free(replarg);
-    bqn_free(replfun);
-    bqn_free(obj);
-
-    repl
-}
-
-static mut TRAP: BQNV = 0;
-static INIT_TRAP: Once = Once::new();
-
-// consumes all
-unsafe fn bqn_repl_eval(eval: BQNV, x: BQNV) -> Result<BQNV, String> {
-    INIT_TRAP.call_once(|| {
-        TRAP = bqn_eval_str("{1‿(𝕎 𝕩)}⎊{0‿(•CurrentError 𝕩)}");
-    });
-
-    let r = bqn_call2(TRAP, eval, x);
-    let k = bqn_pick(r, 0);
-    let s = bqn_pick(r, 1);
-    let ok = f64_from_bqnv(k);
-    let ret = if ok != 0.0 {
-        Ok(s)
-    } else {
-        Err(str_from_bqnv(s))
-    };
-    bqn_free(eval);
-    bqn_free(x);
-    bqn_free(r);
-    ret
-}
-
-unsafe fn bqn_repl_exec(
-    repl: BQNV,
-    post: BQNV,
-    silent: bool,
-    code: &str,
-) -> Result<String, String> {
-    let x = bqn_repl_eval(repl, str_to_bqnv(code))?;
-    let r = bqn_repl_eval(post, x)?;
+fn bqn_repl_exec(repl: &BQNV, post: &BQNV, silent: bool, code: &str) -> Result<String, String> {
+    let x = BQNValue::call_trap(repl, &BQNValue::from(code))?;
+    let r = BQNValue::call_trap(post, &x)?;
     if silent {
-        bqn_free(r);
         Ok("".to_owned())
     } else {
-        Ok(str_from_bqnv(r))
+        Ok(r.to_string())
     }
 }
 
-unsafe fn bqn_repl_exec_with(
-    repl: BQNV,
-    post: BQNV,
+fn bqn_repl_exec_with(
+    repl: &BQNV,
+    post: &BQNV,
     silent: bool,
     code: &str,
     with: &str,
 ) -> Result<String, String> {
-    let with = bqn_repl_eval(repl, str_to_bqnv(with))?;
+    let with = BQNValue::call_trap(repl, &BQNValue::from(with))?;
     let post = if silent {
-        post
+        BQNValue::from(post)
     } else {
-        let p = bqn_repl_eval(bqn_copy(with), str_to_bqnv("•fmt"));
+        let p = BQNValue::call_trap(&with, &BQNValue::from("•fmt"));
         if let Ok(p) = p {
-            bqn_free(post);
             p
         } else {
-            post
+            BQNValue::from(post)
         }
     };
-    bqn_repl_exec(with, post, silent, code)
+    bqn_repl_exec(&with, &post, silent, code)
 }
 
-unsafe fn bqn_completion(comp: BQNV, code: &str, pos: f64) -> (Vec<String>, i64, i64) {
-    let code = str_to_bqnv(code);
-    let pos = bqn_makeF64(pos);
-    let res = bqn_call2(comp, code, pos);
-    let vec = bqn_pick(res, 0);
-    let cursor_start = f64_from_bqnv(bqn_pick(res, 1)) as i64;
-    let cursor_end = f64_from_bqnv(bqn_pick(res, 2)) as i64;
-
-    let bound = bqn_bound(vec);
-    let mut matches = Vec::with_capacity(bound);
-    for i in 0..bound {
-        let s = str_from_bqnv(bqn_pick(vec, i));
-        matches.push(s);
-    }
-    bqn_free(vec);
-
-    bqn_free(code);
-    bqn_free(pos);
-    bqn_free(res);
+fn bqn_completion(comp: &BQNV, code: &str, pos: f64) -> (Vec<String>, i64, i64) {
+    let code = BQNValue::from(code);
+    let pos = BQNValue::from(pos);
+    let res = BQNValue::call2(comp, &code, &pos);
+    let matches = res.pick(0).to_string_vec();
+    let cursor_start = res.pick(1).to_f64() as i64;
+    let cursor_end = res.pick(2).to_f64() as i64;
 
     (matches, cursor_start, cursor_end)
 }
@@ -365,8 +280,8 @@ fn bqn_is_complete(code: &str) -> &str {
     }
 
     let mut code = code;
-    while code.starts_with(")") {
-        (_, code) = code.split_once("\n").unwrap_or(("", ""));
+    while code.starts_with(')') {
+        (_, code) = code.split_once('\n').unwrap_or(("", ""));
         if code.is_empty() {
             return "incomplete";
         }
@@ -414,34 +329,32 @@ fn bqn_is_complete(code: &str) -> &str {
     }
 }
 
-fn shell_execute(key: &str, shell: Socket) {
+fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
+    let mut ctx = Context {
+        key: key.to_owned(),
+        last_msg: Message::default(),
+        iopub,
+        stdin,
+    };
+
     let mut execution_count: i32 = 0;
 
-    let repl = unsafe { bqn_repl_init() };
+    let repl = bqn_repl_init(&mut ctx);
 
-    let comp = unsafe {
-        bqn_repl_eval(
-            bqn_copy(repl),
-            str_to_bqnv(include_str!("./completion.bqn")),
-        )
-        .expect("Completion should work")
-    };
+    let comp = BQNValue::call_trap(&repl, &BQNValue::from(include_str!("./completion.bqn")))
+        .expect("Completion should work");
 
-    let fmt = unsafe { bqn_eval_str("•fmt") };
-    let img = unsafe {
-        bqn_repl_eval(bqn_copy(repl), str_to_bqnv("•jupyter.image")).expect("Png should work")
-    };
-    let aud = unsafe {
-        bqn_repl_eval(bqn_copy(repl), str_to_bqnv("•jupyter.audio")).expect("Wav should work")
-    };
+    let fmt = BQNValue::eval("•fmt");
+    let nil = BQNValue::eval("{S: @}");
+    let img =
+        BQNValue::call_trap(&repl, &BQNValue::from("•jupyter.image")).expect("Png should work");
+    let aud =
+        BQNValue::call_trap(&repl, &BQNValue::from("•jupyter.audio")).expect("Wav should work");
 
     loop {
         let msg = recv_msg(&shell, key);
 
-        {
-            let mut last_msg = LAST_MSG.lock().unwrap();
-            *last_msg = Some(msg.clone());
-        }
+        ctx.update_msg(msg.clone());
 
         let busy = new_msg(
             &msg,
@@ -457,7 +370,7 @@ fn shell_execute(key: &str, shell: Socket) {
                 "execution_state": "idle",
             }),
         );
-        send_iopub(key, busy);
+        ctx.send_iopub(busy);
 
         match msg.header["msg_type"].as_str() {
             Some("kernel_info_request") => {
@@ -476,7 +389,7 @@ fn shell_execute(key: &str, shell: Socket) {
                         "execution_count": execution_count,
                     }),
                 );
-                send_iopub(key, input);
+                ctx.send_iopub(input);
 
                 // this field is deprecated according to the docs
                 let mut payload: Vec<Value> = Vec::new();
@@ -485,14 +398,15 @@ fn shell_execute(key: &str, shell: Socket) {
                 let mut post = None;
                 let mut with = None;
                 let rslt = loop {
-                    if code.starts_with(")") {
-                        let (cmd, next) = code.split_once("\n").unwrap_or((code, ""));
+                    if code.starts_with(')') {
+                        let (cmd, next) = code.split_once('\n').unwrap_or((code, ""));
                         code = next;
 
                         if cmd.starts_with(")r") {
                             silent = true;
+                            post = Some(&nil);
                         } else if cmd.starts_with(")use") {
-                            let (_, r) = cmd.split_once(" ").unwrap_or(("", ""));
+                            let (_, r) = cmd.split_once(' ').unwrap_or(("", ""));
                             with = Some(r);
                         } else if cmd.starts_with(")off") {
                             payload.push(json!({
@@ -501,10 +415,10 @@ fn shell_execute(key: &str, shell: Socket) {
                             }));
                         } else if cmd.starts_with(")image") {
                             silent = true;
-                            post = Some(unsafe { bqn_copy(img) });
+                            post = Some(&img);
                         } else if cmd.starts_with(")audio") {
                             silent = true;
-                            post = Some(unsafe { bqn_copy(aud) });
+                            post = Some(&aud);
                         } else {
                             break Err(format!("Unknown command {cmd}"));
                         }
@@ -512,13 +426,11 @@ fn shell_execute(key: &str, shell: Socket) {
                         silent = true;
                         break Ok("".to_owned());
                     } else {
-                        let post = post.unwrap_or(unsafe { bqn_copy(fmt) });
+                        let post = post.unwrap_or(&fmt);
                         if let Some(with) = with {
-                            break unsafe {
-                                bqn_repl_exec_with(bqn_copy(repl), post, silent, code, with)
-                            };
+                            break bqn_repl_exec_with(&repl, post, silent, code, with);
                         } else {
-                            break unsafe { bqn_repl_exec(bqn_copy(repl), post, silent, code) };
+                            break bqn_repl_exec(&repl, post, silent, code);
                         }
                     }
                 };
@@ -537,7 +449,7 @@ fn shell_execute(key: &str, shell: Socket) {
                                 "metadata": {},
                             }),
                         );
-                        send_iopub(key, ex_rs);
+                        ctx.send_iopub(ex_rs);
                     }
 
                     reply_msg(
@@ -559,7 +471,7 @@ fn shell_execute(key: &str, shell: Socket) {
                             "traceback": [fail],
                         }),
                     );
-                    send_iopub(key, ex_rs);
+                    ctx.send_iopub(ex_rs);
 
                     reply_msg(
                         &msg,
@@ -578,8 +490,7 @@ fn shell_execute(key: &str, shell: Socket) {
                 let code = msg.content["code"].as_str().unwrap();
                 let pos = msg.content["cursor_pos"].as_f64().unwrap();
 
-                let (matches, cursor_start, cursor_end) =
-                    unsafe { bqn_completion(comp, code, pos) };
+                let (matches, cursor_start, cursor_end) = bqn_completion(&comp, code, pos);
 
                 let re = reply_msg(
                     &msg,
@@ -605,7 +516,7 @@ fn shell_execute(key: &str, shell: Socket) {
             }
             Some(_) | None => {}
         }
-        send_iopub(key, idle);
+        ctx.send_iopub(idle);
     }
 }
 
@@ -629,28 +540,14 @@ fn run(filename: String) {
     let iopub = ctx.socket(zmq::PUB).unwrap();
     iopub.bind(&format_address(&ci, ci.iopub_port)).unwrap();
 
-    {
-        let mut my_stdin = STDIN.lock().unwrap();
-        *my_stdin = Some(stdin);
-    }
-    {
-        let mut my_iopub = IOPUB.lock().unwrap();
-        *my_iopub = Some(iopub);
-    }
-
-    {
-        let mut key = KEY.lock().unwrap();
-        *key = Some(ci.key.clone());
-    }
-
     thread::spawn(move || loop {
         let heartbeat = hb.recv_bytes(0).unwrap();
         hb.send(&heartbeat, 0).unwrap();
     });
 
-    let shell_key = ci.key.clone();
+    let ci_key = ci.key.clone();
     thread::spawn(move || {
-        shell_execute(&shell_key, shell);
+        shell_execute(&ci_key, shell, iopub, stdin);
     });
 
     loop {
@@ -708,7 +605,7 @@ fn main() {
         match arg.as_str() {
             "-f" => {
                 let filename = args.next().expect("Missing connection file");
-                return run(filename);
+                run(filename)
             }
             _ => panic!("Unknown option"),
         }

@@ -96,7 +96,7 @@ pub fn reply_msg(msg: &Message, content: Value) -> Message {
     let old_msg_type = msg.header["msg_type"].as_str().unwrap();
     let msg_type = old_msg_type.to_owned().replace("_request", "_reply");
     let mut reply = new_msg(msg, &msg_type, content);
-    reply.identities = msg.identities.clone();
+    reply.identities.clone_from(&msg.identities);
     reply
 }
 

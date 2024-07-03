@@ -62,7 +62,7 @@
                 Clear ⇐ Clear
                 Image ⇐ {
                     p ← Png 𝕩
-                    h ← "<div><img src=""data:image/png;base64,"∾p∾""" /></div>"
+                    h ← "<div><img style=""image-rendering:pixelated;"" src=""data:image/png;base64,"∾p∾""" /></div>"
                     HTML h, @
                 }
                 audioFreq ⇐ 44100

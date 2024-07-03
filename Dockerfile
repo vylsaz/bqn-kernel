@@ -3,7 +3,7 @@ RUN useradd -m test
 RUN apt update && apt install -y clang jupyter-notebook
 
 WORKDIR /home/test
-RUN git clone --recurse-submodules --depth 1 -b develop https://github.com/dzaima/CBQN.git
+RUN git clone --recurse-submodules --depth 1 https://github.com/dzaima/CBQN.git
 WORKDIR /home/test/CBQN
 RUN make shared-o3
 RUN cp libcbqn.so /lib/libcbqn.so
