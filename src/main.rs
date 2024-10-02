@@ -341,8 +341,11 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
 
     let repl = bqn_repl_init(&mut ctx);
 
-    let comp = BQNValue::call_trap(&repl, &BQNValue::from(include_str!("./completion.bqn")))
-        .expect("Completion should work");
+    let comp = {
+        let c = BQNValue::call_trap(&repl, &BQNValue::from(include_str!("./completion.bqn")))
+            .expect("Completion should work");
+        BQNValue::call_trap(&c, &repl).expect("Completion should work")
+    };
 
     let fmt = BQNValue::eval("•fmt");
     let nil = BQNValue::eval("{S: @}");

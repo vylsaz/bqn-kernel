@@ -10,36 +10,42 @@ GetIdent ← {𝕊 code:
 IsPrefixOf ← ≤○≠◶0‿(⊣≡≠⊸↑)
 ToLower ← +⟜(32×1="A["⊸⍋)
 
-{code S pos:
-    code ↩ pos↑code 
-    {
-    {𝕊: 1<≠code}◶0‿{𝕊: '\'≡¯2⊑code} @?
-        k ← ¯1⊑code
-        v ← ⥊(⊑kk⊐k)⊑kv∾k
-        ⟨⟨v⟩, pos-2, pos⟩
-    ;
-        ident ← GetIdent code
-        { 
-        0≡≠ident? ⟨⟩‿pos‿pos
+{𝕊 repl:
+    {code 𝕊 pos:
+        code ↩ pos↑code 
+        {
+        {𝕊: 1<≠code}◶0‿{𝕊: '\'≡¯2⊑code} @?
+            k ← ¯1⊑code
+            v ← ⥊(⊑kk⊐k)⊑kv∾k
+            ⟨⟨v⟩, pos-2, pos⟩
         ;
-        ¬'•'≡⊑ident? ⟨⟩‿pos‿pos
-        ;
-        ¬⊑'.'∊ident?
-            prefix ← ToLower (∨` '_'⊸≠)⊸/1↓ident
-            suffixes ← (≠prefix)↓¨prefix⊸IsPrefixOf¨⊸/•listsys
-            ⟨ident⊸∾¨suffixes, pos-≠ident, pos⟩
-        ;
-            ⟨nsname, name⟩ ← (+`·(»⊸<∨`)⌾⌽'.'⊸=)⊸⊔ ident
-            ⟨ok, ns⟩ ← {1‿(•BQN 𝕩)}⎊{0‿𝕩} nsname
-            {
-            ¬ok? ⟨⟩‿pos‿pos
+            ident ← GetIdent code
+            { 
+            0≡≠ident? ⟨⟩‿pos‿pos
             ;
-            ¬6≡•Type ns? ⟨⟩‿pos‿pos
+            ¬⊑'.'∊ident? 
+                {
+                ¬'•'≡⊑ident? ⟨⟩‿pos‿pos
+                ;
+                    name ← 1↓ident
+                    prefix ← ToLower (∨` '_'⊸≠)⊸/name
+                    suffixes ← (≠prefix)↓¨prefix⊸IsPrefixOf¨⊸/•listsys
+                    ⟨name⊸∾¨suffixes, pos-≠name, pos⟩
+                }
             ;
-                keys ← •ns.Keys ns
-                prefix ← ToLower (∨` '_'⊸≠)⊸/1↓name
-                suffixes ← (≠prefix)↓¨prefix⊸IsPrefixOf¨⊸/keys
-                ⟨ident⊸∾¨suffixes, pos-≠ident, pos⟩
+                ⟨nsname, dname⟩ ← (+`·(»⊸<∨`)⌾⌽'.'⊸=)⊸⊔ ident
+                ⟨ok, ns⟩ ← {1‿(Repl 𝕩)}⎊{0‿𝕩} nsname
+                {
+                ¬ok? ⟨⟩‿pos‿pos
+                ;
+                ¬6≡•Type ns? ⟨⟩‿pos‿pos
+                ;
+                    name ← 1↓dname
+                    keys ← •ns.Keys ns
+                    prefix ← ToLower (∨` '_'⊸≠)⊸/name
+                    suffixes ← (≠prefix)↓¨prefix⊸IsPrefixOf¨⊸/keys
+                    ⟨name⊸∾¨suffixes, pos-≠name, pos⟩
+                }
             }
         }
     }
