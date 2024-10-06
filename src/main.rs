@@ -22,7 +22,7 @@ fn kernel_info() -> Value {
             "mimetype": "text/bqn",
             "file_extension": ".bqn"
         },
-        "banner": "BQN kernel",
+        "banner": "BQN kernel\nType \")off\" to quit",
     })
 }
 
@@ -289,6 +289,7 @@ fn bqn_is_complete(code: &str) -> &str {
 
     let mut n_char = 0i8;
     let mut in_str = false;
+    let mut in_com = false;
     let mut stack = Vec::new();
     for c in code.chars() {
         if n_char == 1 {
@@ -296,6 +297,12 @@ fn bqn_is_complete(code: &str) -> &str {
             continue;
         }
         if in_str && c != '"' {
+            continue;
+        }
+        if in_com {
+            if c == '\n' {
+                in_com = false;
+            }
             continue;
         }
         match c {
@@ -312,10 +319,15 @@ fn bqn_is_complete(code: &str) -> &str {
                     n_char = 1;
                 } else if n_char == 2 {
                     n_char = 0;
+                } else {
+                    return "invalid";
                 }
             }
             '"' => {
                 in_str = !in_str;
+            }
+            '#' => {
+                in_com = true;
             }
             _ => {}
         }
