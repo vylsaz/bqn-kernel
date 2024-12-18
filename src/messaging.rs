@@ -19,6 +19,7 @@ pub struct Message {
     pub parent_header: Value,
     pub metadata: Value,
     pub content: Value,
+    pub buffers: Vec<Vec<u8>>,
 }
 
 const DELIM: &[u8] = b"<IDS|MSG>";
@@ -27,7 +28,7 @@ fn msg_from_parts(parts: Vec<Vec<u8>>, key: &str) -> Message {
     let mut i = parts.split(|part| part.as_slice() == DELIM);
     let identities = i.next().unwrap();
     let raw_msgs = i.next().unwrap();
-    if raw_msgs.len() < 4 {
+    if raw_msgs.len() < 5 {
         panic!("Message length");
     }
     let old_mac = hex::decode(&raw_msgs[0]).unwrap();
@@ -42,6 +43,11 @@ fn msg_from_parts(parts: Vec<Vec<u8>>, key: &str) -> Message {
         parent_header: from_slice(&raw_msgs[2]).unwrap(),
         metadata: from_slice(&raw_msgs[3]).unwrap(),
         content: from_slice(&raw_msgs[4]).unwrap(),
+        buffers: if raw_msgs.len() > 5 {
+            raw_msgs[5..].to_vec()
+        } else {
+            vec![]
+        },
     }
 }
 
@@ -71,6 +77,10 @@ fn msg_to_parts(msg: &Message, key: &str) -> Vec<Vec<u8>> {
         parts.push(msg.to_vec());
     }
 
+    for buf in &msg.buffers {
+        parts.push(buf.to_vec());
+    }
+
     parts
 }
 
@@ -88,13 +98,14 @@ pub fn new_msg(msg: &Message, msg_type: &str, content: Value) -> Message {
         parent_header: msg.header.clone(),
         metadata: json!({}),
         content,
+        buffers: vec![],
     }
 }
 
 // identities transferred
 pub fn reply_msg(msg: &Message, content: Value) -> Message {
     let old_msg_type = msg.header["msg_type"].as_str().unwrap();
-    let msg_type = old_msg_type.to_owned().replace("_request", "_reply");
+    let msg_type = old_msg_type.replace("_request", "_reply");
     let mut reply = new_msg(msg, &msg_type, content);
     reply.identities.clone_from(&msg.identities);
     reply
