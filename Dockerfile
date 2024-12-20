@@ -15,7 +15,8 @@ COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 COPY ./src/       ./src/
 COPY ./bqn/       ./bqn/
-RUN cargo run
+COPY ./bqn-v6/    ./bqn-v6/
+RUN cargo run --features v6
 RUN cp -r ./bqn/  ./.local/share/jupyter/kernels/
 
 USER test

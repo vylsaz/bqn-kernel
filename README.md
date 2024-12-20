@@ -18,9 +18,9 @@ Then run:
 ```
 cargo run
 ```
-Finally, copy the `./bqn/` folder to one of the folders listed [here](https://jupyter-client.readthedocs.io/en/latest/kernels.html#kernel-specs).
+(add `--features v6` if you are using jupyter notebook classic)
 
-(`kernel.js`, `bqn.css` and `BQN386.ttf` only work for jupyter classic, so jupyter lab users can delete them.)
+Finally, copy the `./bqn/` folder to one of the folders listed [here](https://jupyter-client.readthedocs.io/en/latest/kernels.html#kernel-specs).
 
 ## quirks 
 

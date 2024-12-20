@@ -7,8 +7,21 @@ use messaging::{
     format_address, new_msg, read_connection_file, recv_msg, reply_msg, send_msg, Message,
 };
 use serde_json::{json, Value};
-use std::{fs::File, thread};
+use std::{fs, path::Path, thread};
+use uuid::Uuid;
 use zmq::Socket;
+
+fn merge_objs_mut(a: &mut Value, b: Value) {
+    // match (a, b) {
+    //     (Value::Object(a), Value::Object(b)) => {
+    //         a.extend(b);
+    //     }
+    //     _ => {}
+    // }
+    if let (Value::Object(a), Value::Object(b)) = (a, b) {
+        a.extend(b);
+    }
+}
 
 fn kernel_info() -> Value {
     json!({
@@ -31,6 +44,7 @@ struct Context {
     last_msg: Message,
     iopub: Socket,
     stdin: Socket,
+    comm_objs: serde_json::Map<String, Value>,
 }
 impl Context {
     fn update_msg(&mut self, new_msg: Message) {
@@ -40,10 +54,14 @@ impl Context {
     fn send_iopub(&self, msg: Message) {
         send_msg(&self.iopub, &self.key, msg);
     }
-    fn reply_iopub(&self, msg_type: &str, content: Value) {
+    fn reply_iopub(&self, msg_type: &str, content: Value, metadata: Option<Value>) {
         let msg = &self.last_msg;
-        let re = new_msg(msg, msg_type, content);
+        let re = new_msg(msg, msg_type, content, metadata);
         self.send_iopub(re);
+    }
+
+    fn get_state(&self, id: &str) -> Option<&Value> {
+        self.comm_objs.get(id)
     }
 
     fn as_bqnvalue(&mut self) -> BQNValue {
@@ -53,8 +71,15 @@ impl Context {
 
     fn from_bqnvalue(value: &BQNValue) -> &Self {
         unsafe {
-            let ptr = value.to_ptr::<Context>();
+            let ptr = value.as_ptr::<Context>();
             ptr.as_ref().unwrap()
+        }
+    }
+
+    fn from_bqnvalue_mut(value: &mut BQNValue) -> &mut Self {
+        unsafe {
+            let ptr = value.as_ptr::<Context>();
+            ptr.as_mut().unwrap()
         }
     }
 }
@@ -71,6 +96,7 @@ fn notebook_input(ctx: &Context, prompt: &str, password: bool) -> String {
             "prompt": prompt,
             "password": password,
         }),
+        None,
     );
     input_req.identities.clone_from(&msg.identities);
     send_msg(stdin, key, input_req);
@@ -90,6 +116,7 @@ fn notebook_output(ctx: &Context, name: &str, text: &str) {
             "name": name,
             "text": text,
         }),
+        None,
     );
 }
 
@@ -102,11 +129,94 @@ fn notebook_display(ctx: &Context, mimetype: &str, data: &str) {
             },
             "metadata": {},
         }),
+        None,
     );
 }
 
 fn notebook_output_clear(ctx: &Context, wait: bool) {
-    ctx.reply_iopub("clear_output", json!({"wait": wait}));
+    ctx.reply_iopub("clear_output", json!({"wait": wait}), None);
+}
+
+fn widget_init(ctx: &mut Context, state: &Value) -> String {
+    let id = Uuid::new_v4().to_string();
+    ctx.comm_objs.insert(id.clone(), state.clone());
+    id
+}
+#[cfg(feature = "v6")]
+fn comm_widget_init(ctx: &Context, id: &str, state: &Value) {
+    ctx.reply_iopub(
+        "comm_open",
+        json!({
+            "comm_id": id,
+            "target_name": "jupyter.widget",
+            "data": state,
+        }),
+        None,
+    );
+}
+#[cfg(not(feature = "v6"))]
+fn comm_widget_init(ctx: &Context, id: &str, state: &Value) {
+    ctx.reply_iopub(
+        "comm_open",
+        json!({
+            "comm_id": id,
+            "target_name": "jupyter.widget",
+            "data": {
+                "state": state,
+                "buffer_paths": [],
+                // TODO: buffers
+            }
+        }),
+        Some(json!({"version": "2.1.0"})),
+    );
+}
+fn widget_update(ctx: &mut Context, id: &str, state: &Value) {
+    if let Some(data) = ctx.comm_objs.get_mut(id) {
+        merge_objs_mut(data, state.clone());
+    }
+}
+fn comm_widget_update(ctx: &Context, id: &str, state: &Value) {
+    ctx.reply_iopub(
+        "comm_msg",
+        json!({
+            "comm_id": id,
+            "data": {
+                "method": "update",
+                "state": state,
+                "buffer_paths": [],
+                // TODO: buffers
+            },
+        }),
+        None,
+    );
+}
+#[cfg(feature = "v6")]
+fn comm_widget_display(ctx: &Context, id: &str) {
+    ctx.reply_iopub(
+        "comm_msg",
+        json!({
+            "comm_id": id,
+            "data": { "method": "display" },
+        }),
+        None,
+    );
+}
+#[cfg(not(feature = "v6"))]
+fn comm_widget_display(ctx: &Context, id: &str) {
+    ctx.reply_iopub(
+        "display_data",
+        json!({
+            "data": {
+                "application/vnd.jupyter.widget-view+json": {
+                    "model_id": id,
+                    "version_major": 2,
+                    "version_minor": 0,
+                },
+            },
+            "metadata": {},
+        }),
+        Some(json!({"version": "2.1.0"})),
+    );
 }
 
 unsafe extern "C" fn bqn_notebook_input(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
@@ -114,8 +224,8 @@ unsafe extern "C" fn bqn_notebook_input(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
     let w = BQNValue::from(w);
     let x = BQNValue::from(x);
     let ctx = Context::from_bqnvalue(&o);
-    let prompt = w.to_string();
-    let password = x.to_f64();
+    let prompt = w.as_string();
+    let password = x.as_f64();
     let result = notebook_input(ctx, &prompt, password != 0.0);
     BQNValue::from(result).copy()
 }
@@ -125,8 +235,8 @@ unsafe extern "C" fn bqn_notebook_output(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
     let w = BQNValue::from(w);
     let x = BQNValue::from(x);
     let ctx = Context::from_bqnvalue(&o);
-    let name = w.to_string();
-    let text = x.to_string();
+    let name = w.as_string();
+    let text = x.as_string();
     notebook_output(ctx, &name, &text);
     x.copy()
 }
@@ -136,8 +246,8 @@ unsafe extern "C" fn bqn_notebook_display(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
     let w = BQNValue::from(w);
     let x = BQNValue::from(x);
     let ctx = Context::from_bqnvalue(&o);
-    let mimetype = w.to_string();
-    let data = x.to_string();
+    let mimetype = w.as_string();
+    let data = x.as_string();
     notebook_display(ctx, &mimetype, &data);
     x.copy()
 }
@@ -146,7 +256,7 @@ unsafe extern "C" fn bqn_notebook_clear(obj: BQNV, x: BQNV) -> BQNV {
     let o = BQNValue::from(obj);
     let x = BQNValue::from(x);
     let ctx = Context::from_bqnvalue(&o);
-    let wait = x.to_f64();
+    let wait = x.as_f64();
     notebook_output_clear(ctx, wait != 0.0);
     BQNValue::null().copy()
 }
@@ -160,7 +270,7 @@ unsafe extern "C" fn bqn_notebook_png(obj: BQNV, x: BQNV) -> BQNV {
     let width = shape[1] as u32;
     let channels = shape[2] as u32;
 
-    let img = x.to_f64_vec();
+    let img = x.as_f64_vec();
     let data: Vec<u8> = img.iter().map(|&f| (f * 255.0) as u8).collect();
     let png = base64_png(width, height, channels, &data);
     let ret = match png {
@@ -178,15 +288,90 @@ unsafe extern "C" fn bqn_notebook_wav(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
     let shape = x.shape();
     let channels = shape[1] as u16;
 
-    let sample_rate = w.to_f64() as u32;
+    let sample_rate = w.as_f64() as u32;
 
-    let aud = x.to_f64_vec();
+    let aud = x.as_f64_vec();
     let wav = base64_wav(channels, sample_rate, &aud);
     let ret = match wav {
         Ok(wav) => BQNValue::from([BQNValue::from(1.0), BQNValue::from(wav)]),
         Err(err) => BQNValue::from([BQNValue::from(0.0), BQNValue::from(err)]),
     };
     ret.copy()
+}
+
+fn bqn_widget_init(ctx: &mut Context, state: Value) -> String {
+    let id = widget_init(ctx, &state);
+    comm_widget_init(ctx, &id, &state);
+    id
+}
+
+unsafe extern "C" fn bqn_widget_test(obj: BQNV, x: BQNV) -> BQNV {
+    let mut o = BQNValue::from(obj);
+    let _ = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue_mut(&mut o);
+
+    let layout = bqn_widget_init(
+        ctx,
+        json!({
+            "_model_module": "@jupyter-widgets/base", // "jupyter-js-widgets",
+            "_model_module_version": "2.0.0",
+            "_model_name": "LayoutModel",
+            "_view_module": "@jupyter-widgets/base", // "jupyter-js-widgets",
+            "_view_module_version": "2.0.0",
+            "_view_name": "LayoutView",
+        }),
+    );
+    let style = bqn_widget_init(
+        ctx,
+        json!({
+            "_model_module": "@jupyter-widgets/controls", // "jupyter-js-widgets",
+            "_model_module_version": "2.0.0",
+            "_model_name": "SliderStyleModel",
+            "_view_module": "@jupyter-widgets/base", // "jupyter-js-widgets",
+            "_view_module_version": "2.0.0",
+            "_view_name": "StyleView",
+        }),
+    );
+    let slider = bqn_widget_init(
+        ctx,
+        json!({
+            "_model_module": "@jupyter-widgets/controls", // "jupyter-js-widgets",
+            "_model_module_version": "2.0.0",
+            "_model_name": "IntSliderModel",
+            "_view_module": "@jupyter-widgets/controls", // "jupyter-js-widgets",
+            "_view_module_version": "2.0.0",
+            "_view_name": "IntSliderView",
+            "description": "",
+            "layout": "IPY_MODEL_".to_owned()+&layout,
+            "style": "IPY_MODEL_".to_owned()+&style,
+            "max": 100,
+            "min": 0,
+            "step": 1,
+            "value": 0,
+        }),
+    );
+    comm_widget_display(ctx, &slider);
+
+    BQNValue::from(slider).copy()
+}
+
+unsafe extern "C" fn bqn_widget_get(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
+    let o = BQNValue::from(obj);
+    let w = BQNValue::from(w);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue(&o);
+    let id = w.as_string();
+    let name = x.as_string();
+    let state = ctx.get_state(&id);
+    if let Some(state) = state {
+        if let Some(got) = state.get(name) {
+            BQNValue::from(got).copy()
+        } else {
+            BQNValue::null().copy()
+        }
+    } else {
+        BQNValue::null().copy()
+    }
 }
 
 fn bqn_repl_init(ctx: &mut Context) -> BQNValue {
@@ -202,6 +387,8 @@ fn bqn_repl_init(ctx: &mut Context) -> BQNValue {
         BQNValue::fn1(bqn_notebook_clear, &obj),
         BQNValue::fn1(bqn_notebook_png, &obj),
         BQNValue::fn2(bqn_notebook_wav, &obj),
+        BQNValue::fn1(bqn_widget_test, &obj),
+        BQNValue::fn2(bqn_widget_get, &obj),
     ]);
 
     BQNValue::call1(&replfun, &replarg)
@@ -213,7 +400,7 @@ fn bqn_repl_exec(repl: &BQNV, post: &BQNV, silent: bool, code: &str) -> Result<S
     if silent {
         Ok("".to_owned())
     } else {
-        Ok(r.to_string())
+        Ok(r.as_string())
     }
 }
 
@@ -242,9 +429,9 @@ fn bqn_completion(comp: &BQNV, code: &str, pos: f64) -> (Vec<String>, i64, i64) 
     let code = BQNValue::from(code);
     let pos = BQNValue::from(pos);
     let res = BQNValue::call2(comp, &code, &pos);
-    let matches = res.pick(0).to_string_vec();
-    let cursor_start = res.pick(1).to_f64() as i64;
-    let cursor_end = res.pick(2).to_f64() as i64;
+    let matches = res.pick(0).as_string_vec();
+    let cursor_start = res.pick(1).as_f64() as i64;
+    let cursor_end = res.pick(2).as_f64() as i64;
 
     (matches, cursor_start, cursor_end)
 }
@@ -347,6 +534,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
         last_msg: Message::default(),
         iopub,
         stdin,
+        comm_objs: serde_json::Map::new(),
     };
 
     let mut execution_count: i32 = 0;
@@ -377,6 +565,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
             json!({
                 "execution_state": "busy",
             }),
+            None,
         );
         let idle = new_msg(
             &msg,
@@ -384,12 +573,13 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
             json!({
                 "execution_state": "idle",
             }),
+            None,
         );
         ctx.send_iopub(busy);
 
         match msg.header["msg_type"].as_str() {
             Some("kernel_info_request") => {
-                let re = reply_msg(&msg, kernel_info());
+                let re = reply_msg(&msg, kernel_info(), None);
                 send_msg(&shell, key, re);
             }
             Some("execute_request") => {
@@ -403,6 +593,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                         "code": code,
                         "execution_count": execution_count,
                     }),
+                    None,
                 );
                 ctx.send_iopub(input);
 
@@ -463,6 +654,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                                 },
                                 "metadata": {},
                             }),
+                            None,
                         );
                         ctx.send_iopub(ex_rs);
                     }
@@ -474,6 +666,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                             "execution_count": execution_count,
                             "payload": payload,
                         }),
+                        None,
                     )
                 } else {
                     let fail = rslt.unwrap_err();
@@ -485,6 +678,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                             "evalue": fail,
                             "traceback": [fail],
                         }),
+                        None,
                     );
                     ctx.send_iopub(ex_rs);
 
@@ -497,6 +691,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                             "evalue": fail,
                             "traceback": [fail],
                         }),
+                        None,
                     )
                 };
                 send_msg(&shell, key, re);
@@ -516,6 +711,7 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                         "cursor_end": cursor_end,
                         "metadata": {},
                     }),
+                    None,
                 );
                 send_msg(&shell, key, re);
             }
@@ -526,8 +722,69 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                     json!({
                         "status": bqn_is_complete(code),
                     }),
+                    None,
                 );
                 send_msg(&shell, key, re);
+            }
+            Some("comm_open") => {
+                println!("{}", msg.content);
+                let id = msg.content["comm_id"].as_str().unwrap();
+                match msg.content["target_name"].as_str() {
+                    Some("jupyter.widget.version") => {
+                        ctx.reply_iopub(
+                            "comm_msg",
+                            json!({
+                                "comm_id": id,
+                                "data": {
+                                    "method": "update_states",
+                                    "version": "~2.1.0",
+                                }
+                            }),
+                            None,
+                        );
+                    }
+                    Some(_) | None => {
+                        ctx.reply_iopub(
+                            "comm_close",
+                            json!({
+                                "comm_id": id,
+                                "data": {}
+                            }),
+                            None,
+                        );
+                    }
+                }
+            }
+            Some("comm_msg") => {
+                println!("msg: {}", msg.content);
+                let id = msg.content["comm_id"].as_str().unwrap();
+                let data = &msg.content["data"];
+                match data["method"].as_str() {
+                    Some("backbone") => {
+                        widget_update(&mut ctx, id, &data["sync_data"]);
+                    }
+                    Some("update") => {
+                        widget_update(&mut ctx, id, &data["state"]);
+
+                        let st = ctx.get_state(id).unwrap();
+                        println!("value: {}", st["value"]);
+                    }
+                    Some("request_state") => {
+                        if let Some(state) = ctx.get_state(id) {
+                            comm_widget_update(&ctx, id, state);
+                        }
+                    }
+                    Some(_) | None => {
+                        ctx.reply_iopub(
+                            "comm_close",
+                            json!({
+                                "comm_id": id,
+                                "data": {}
+                            }),
+                            None,
+                        );
+                    }
+                }
             }
             Some(_) | None => {}
         }
@@ -576,6 +833,7 @@ fn run(filename: String) {
                         "status": "ok",
                         "restart": is_restart,
                     }),
+                    None,
                 );
                 send_msg(&control, &ci.key, re);
                 return;
@@ -600,7 +858,20 @@ fn env_list() -> Value {
 }
 
 fn create_kernel_json() {
-    let file = File::create("./bqn/kernel.json").expect("cannot create kernel.json");
+    let bqn_dir = Path::new("./bqn");
+    assert!(bqn_dir.exists());
+
+    #[cfg(feature = "v6")]
+    {
+        let v6_dir = Path::new("./bqn-v6");
+        for entry in fs::read_dir(v6_dir).unwrap() {
+            if let Ok(entry) = entry {
+                fs::copy(entry.path(), bqn_dir.join(entry.file_name())).unwrap();
+            }
+        }
+    }
+
+    let file = fs::File::create(bqn_dir.join("kernel.json")).expect("cannot create kernel.json");
     let kernel = json!({
         "argv": [
             std::env::current_exe().unwrap(),

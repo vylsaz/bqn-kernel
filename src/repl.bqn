@@ -1,10 +1,9 @@
-{⟨rawInput,rawOutput,rawDisplay,rawClear,rawPng, rawWav⟩:
-    IsString ← {
-        (0≡•Type 𝕩)∧⊑(•internal.ElType 𝕩)∊[5,6,7]
-    }
-    IsNumericArray ← {
-        (0≡•Type 𝕩)∧(•internal.ElType 𝕩)<5
-    }
+{⟨
+    rawInput,rawOutput,rawDisplay,rawClear,rawPng, rawWav, 
+    widgetTest, widgetGet
+⟩:
+    IsString ← {(0≡•Type 𝕩)∧⊑(•internal.ElType 𝕩)∊[5,6,7]}
+    IsNumericArray ← {(0≡•Type 𝕩)∧(•internal.ElType 𝕩)<5}
 
     Input ← {
         "Prompt must be a string"!IsString 𝕨
@@ -82,6 +81,8 @@
                 msg ← "•Exit is disabled for jupyter notebook. "
                 !msg∾"If in console, use )off to exit"
             }
+            "test"‿widgetTest
+            "get"‿widgetGet
         ⟩
     }
 }
