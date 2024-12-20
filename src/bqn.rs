@@ -81,10 +81,10 @@ impl BQNValue {
         Self(unsafe { bqn_makeChar(0) })
     }
 
-    pub fn to_f64(&self) -> f64 {
+    pub fn as_f64(&self) -> f64 {
         unsafe { bqn_readF64(self.0) }
     }
-    pub fn to_f64_vec(&self) -> Vec<f64> {
+    pub fn as_f64_vec(&self) -> Vec<f64> {
         unsafe {
             let bound = self.bound();
             let mut vec = Vec::with_capacity(bound);
@@ -95,8 +95,7 @@ impl BQNValue {
         }
     }
 
-    #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self) -> String {
+    pub fn as_string(&self) -> String {
         unsafe {
             let utf8 = Self(bqn_call1(UTF8, self.0));
             let bound = utf8.bound();
@@ -107,7 +106,7 @@ impl BQNValue {
             String::from_utf8(bytes).expect("Should be valid UTF8")
         }
     }
-    pub fn to_string_vec(&self) -> Vec<String> {
+    pub fn as_string_vec(&self) -> Vec<String> {
         let bound = self.bound();
         let mut vec = Vec::with_capacity(bound);
         for i in 0..bound {
@@ -139,7 +138,7 @@ impl BQNValue {
         unsafe {
             let trap = TRAP;
             let r = Self::call2(&trap, f, x);
-            let ok = r.pick(0).to_f64();
+            let ok = r.pick(0).as_f64();
             if ok != 0.0 {
                 let ret = r.pick(1);
                 Ok(ret)
@@ -169,9 +168,14 @@ impl From<&str> for BQNValue {
         Self(unsafe { bqn_makeUTF8Str(value.len(), value.as_ptr() as *const c_char) })
     }
 }
+impl From<&String> for BQNValue {
+    fn from(value: &String) -> Self {
+        Self::from(value.as_str())
+    }
+}
 impl From<String> for BQNValue {
     fn from(value: String) -> Self {
-        Self(unsafe { bqn_makeUTF8Str(value.len(), value.as_ptr() as *const c_char) })
+        Self::from(&value)
     }
 }
 
@@ -186,10 +190,20 @@ impl From<&BQNV> for BQNValue {
     }
 }
 
+impl From<&[BQNValue]> for BQNValue {
+    fn from(value: &[BQNValue]) -> Self {
+        let vec: Vec<BQNV> = value.iter().map(|v| v.copy()).collect();
+        Self(unsafe { bqn_makeObjVec(vec.len(), vec.as_ptr()) })
+    }
+}
+impl From<Vec<BQNValue>> for BQNValue {
+    fn from(value: Vec<BQNValue>) -> Self {
+        value.as_slice().into()
+    }
+}
 impl<const N: usize> From<[BQNValue; N]> for BQNValue {
     fn from(value: [BQNValue; N]) -> Self {
-        let vec: Vec<BQNV> = value.into_iter().map(|v| v.copy()).collect();
-        Self(unsafe { bqn_makeObjVec(vec.len(), vec.as_ptr()) })
+        value.as_slice().into()
     }
 }
 
