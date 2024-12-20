@@ -85,7 +85,7 @@ fn msg_to_parts(msg: &Message, key: &str) -> Vec<Vec<u8>> {
 }
 
 // identities not transferred
-pub fn new_msg(msg: &Message, msg_type: &str, content: Value) -> Message {
+pub fn new_msg(msg: &Message, msg_type: &str, content: Value, metadata: Option<Value>) -> Message {
     let mut header = msg.header.clone();
     header["msg_type"] = json!(msg_type);
     header["username"] = json!("kernel");
@@ -96,17 +96,17 @@ pub fn new_msg(msg: &Message, msg_type: &str, content: Value) -> Message {
         identities: Vec::new(),
         header,
         parent_header: msg.header.clone(),
-        metadata: json!({}),
+        metadata: metadata.unwrap_or(json!({})),
         content,
         buffers: vec![],
     }
 }
 
 // identities transferred
-pub fn reply_msg(msg: &Message, content: Value) -> Message {
+pub fn reply_msg(msg: &Message, content: Value, metadata: Option<Value>) -> Message {
     let old_msg_type = msg.header["msg_type"].as_str().unwrap();
     let msg_type = old_msg_type.replace("_request", "_reply");
-    let mut reply = new_msg(msg, &msg_type, content);
+    let mut reply = new_msg(msg, &msg_type, content, metadata);
     reply.identities.clone_from(&msg.identities);
     reply
 }
