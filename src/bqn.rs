@@ -116,7 +116,7 @@ impl BQNValue {
         vec
     }
 
-    pub fn to_ptr<T>(&self) -> *mut T {
+    pub fn as_ptr<T>(&self) -> *mut T {
         unsafe {
             let bound = self.bound();
             let mut bytes = Vec::with_capacity(bound);
@@ -155,7 +155,26 @@ impl BQNValue {
     pub fn fn2(f: unsafe extern "C" fn(obj: BQNV, w: BQNV, x: BQNV) -> BQNV, obj: &BQNV) -> Self {
         Self(unsafe { bqn_makeBoundFn2(Some(f), *obj) })
     }
+
+    pub fn test(&self, pred: &str) -> bool {
+        let pred = Self::eval(pred);
+        Self::call1(&pred, self).as_f64() != 0.0
+    }
+    pub fn is_f64(&self) -> bool {
+        self.test("1≡•Type")
+    }
+    pub fn is_string(&self) -> bool {
+        self.test("{(0≡•Type 𝕩)∧⊑(•internal.ElType 𝕩)∊[5,6,7]}")
+    }
 }
+
+impl PartialEq for BQNValue {
+    fn eq(&self, other: &Self) -> bool {
+        let m = Self::eval("≡");
+        Self::call2(&m, self, other).as_f64() != 0.0
+    }
+}
+impl Eq for BQNValue {}
 
 impl From<f64> for BQNValue {
     fn from(value: f64) -> Self {
@@ -224,23 +243,67 @@ impl<T> From<*mut T> for BQNValue {
     }
 }
 
-impl From<&serde_json::Value> for BQNValue {
-    fn from(value: &serde_json::Value) -> Self {
+type Json = serde_json::Value;
+
+impl From<&Json> for BQNValue {
+    fn from(value: &Json) -> Self {
         match value {
-            serde_json::Value::Null => Self::eval("<\"null\""),
-            serde_json::Value::Bool(true) => Self::eval("<\"true\""),
-            serde_json::Value::Bool(false) => Self::eval("<\"false\""),
-            serde_json::Value::Number(n) => Self::from(n.as_f64().unwrap()),
-            serde_json::Value::String(s) => Self::from(s),
-            serde_json::Value::Array(a) => {
-                a.iter().map(Self::from).collect::<Vec<_>>().into()
-            }
-            serde_json::Value::Object(o) => {
-                let k: BQNValue = o.keys().map(Self::from).collect::<Vec<_>>().into();
-                let v: BQNValue = o.values().map(Self::from).collect::<Vec<_>>().into();
+            Json::Null => Self::eval("<\"null\""),
+            Json::Bool(true) => Self::eval("<\"true\""),
+            Json::Bool(false) => Self::eval("<\"false\""),
+            Json::Number(n) => Self::from(n.as_f64().unwrap()),
+            Json::String(s) => Self::from(s),
+            Json::Array(a) => Self::from(a.iter().map(Self::from).collect::<Vec<_>>()),
+            Json::Object(o) => {
+                let k = Self::from(o.keys().map(Self::from).collect::<Vec<_>>());
+                let v = Self::from(o.values().map(Self::from).collect::<Vec<_>>());
                 let couple = Self::eval("≍");
                 Self::call2(&couple, &k, &v)
             }
+        }
+    }
+}
+
+impl TryInto<Json> for BQNValue {
+    type Error = ();
+    fn try_into(self) -> Result<Json, Self::Error> {
+        if self == Self::eval("<\"null\"") {
+            Ok(Json::Null)
+        } else if self == Self::eval("<\"true\"") {
+            Ok(Json::Bool(true))
+        } else if self == Self::eval("<\"false\"") {
+            Ok(Json::Bool(false))
+        } else if self.is_f64() {
+            let n = serde_json::Number::from_f64(self.as_f64()).ok_or(())?;
+            Ok(Json::Number(n))
+        } else if self.is_string() {
+            Ok(Json::String(self.as_string()))
+        } else if self.test("1≡=") {
+            // an array
+            let n = self.bound();
+            let mut vec: Vec<Json> = Vec::new();
+            for i in 0..n {
+                let e = self.pick(i);
+                vec.push(e.try_into()?);
+            }
+            Ok(Json::Array(vec))
+        } else if self.test("(2≡≠)∧2≡=") {
+            // an object
+            let tr = Self::eval("⍉");
+            let kv = Self::call1(&tr, &self);
+            let n = kv.shape()[0];
+            let mut map = serde_json::Map::new();
+            for i in 0..n {
+                let k = kv.pick(2 * i);
+                let v = kv.pick(2 * i + 1);
+                if !k.is_string() {
+                    return Err(());
+                }
+                map.insert(k.as_string(), v.try_into()?);
+            }
+            Ok(Json::Object(map))
+        } else {
+            Err(())
         }
     }
 }
