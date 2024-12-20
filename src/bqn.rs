@@ -223,3 +223,24 @@ impl<T> From<*mut T> for BQNValue {
         Self(unsafe { bqn_makeI8Vec(vec.len(), vec.as_ptr()) })
     }
 }
+
+impl From<&serde_json::Value> for BQNValue {
+    fn from(value: &serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => Self::eval("<\"null\""),
+            serde_json::Value::Bool(true) => Self::eval("<\"true\""),
+            serde_json::Value::Bool(false) => Self::eval("<\"false\""),
+            serde_json::Value::Number(n) => Self::from(n.as_f64().unwrap()),
+            serde_json::Value::String(s) => Self::from(s),
+            serde_json::Value::Array(a) => {
+                a.iter().map(Self::from).collect::<Vec<_>>().into()
+            }
+            serde_json::Value::Object(o) => {
+                let k: BQNValue = o.keys().map(Self::from).collect::<Vec<_>>().into();
+                let v: BQNValue = o.values().map(Self::from).collect::<Vec<_>>().into();
+                let couple = Self::eval("≍");
+                Self::call2(&couple, &k, &v)
+            }
+        }
+    }
+}
