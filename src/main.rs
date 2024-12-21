@@ -170,9 +170,12 @@ fn comm_widget_init(ctx: &Context, id: &str, state: &Value) {
         Some(json!({"version": "2.1.0"})),
     );
 }
-fn widget_update(ctx: &mut Context, id: &str, state: &Value) {
+fn widget_update(ctx: &mut Context, id: &str, state: &Value) -> bool {
     if let Some(data) = ctx.comm_objs.get_mut(id) {
         merge_objs_mut(data, state.clone());
+        true
+    } else {
+        false
     }
 }
 fn comm_widget_update(ctx: &Context, id: &str, state: &Value) {
@@ -299,60 +302,18 @@ unsafe extern "C" fn bqn_notebook_wav(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
     ret.copy()
 }
 
-fn bqn_widget_init(ctx: &mut Context, state: Value) -> String {
-    let id = widget_init(ctx, &state);
-    comm_widget_init(ctx, &id, &state);
-    id
-}
-
-unsafe extern "C" fn bqn_widget_test(obj: BQNV, x: BQNV) -> BQNV {
+unsafe extern "C" fn bqn_widget_init(obj: BQNV, x: BQNV) -> BQNV {
     let mut o = BQNValue::from(obj);
-    let _ = BQNValue::from(x);
+    let x = BQNValue::from(x);
     let ctx = Context::from_bqnvalue_mut(&mut o);
-
-    let layout = bqn_widget_init(
-        ctx,
-        json!({
-            "_model_module": "@jupyter-widgets/base", // "jupyter-js-widgets",
-            "_model_module_version": "2.0.0",
-            "_model_name": "LayoutModel",
-            "_view_module": "@jupyter-widgets/base", // "jupyter-js-widgets",
-            "_view_module_version": "2.0.0",
-            "_view_name": "LayoutView",
-        }),
-    );
-    let style = bqn_widget_init(
-        ctx,
-        json!({
-            "_model_module": "@jupyter-widgets/controls", // "jupyter-js-widgets",
-            "_model_module_version": "2.0.0",
-            "_model_name": "SliderStyleModel",
-            "_view_module": "@jupyter-widgets/base", // "jupyter-js-widgets",
-            "_view_module_version": "2.0.0",
-            "_view_name": "StyleView",
-        }),
-    );
-    let slider = bqn_widget_init(
-        ctx,
-        json!({
-            "_model_module": "@jupyter-widgets/controls", // "jupyter-js-widgets",
-            "_model_module_version": "2.0.0",
-            "_model_name": "IntSliderModel",
-            "_view_module": "@jupyter-widgets/controls", // "jupyter-js-widgets",
-            "_view_module_version": "2.0.0",
-            "_view_name": "IntSliderView",
-            "description": "",
-            "layout": "IPY_MODEL_".to_owned()+&layout,
-            "style": "IPY_MODEL_".to_owned()+&style,
-            "max": 100,
-            "min": 0,
-            "step": 1,
-            "value": 0,
-        }),
-    );
-    comm_widget_display(ctx, &slider);
-
-    BQNValue::from(slider).copy()
+    let state = x.try_into();
+    if let Ok(state) = state {
+        let id = widget_init(ctx, &state);
+        comm_widget_init(ctx, &id, &state);
+        BQNValue::from(id).copy()
+    } else {
+        BQNValue::null().copy()
+    }
 }
 
 unsafe extern "C" fn bqn_widget_get(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
@@ -374,6 +335,35 @@ unsafe extern "C" fn bqn_widget_get(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
     }
 }
 
+unsafe extern "C" fn bqn_widget_update(obj: BQNV, w: BQNV, x: BQNV) -> BQNV {
+    let mut o = BQNValue::from(obj);
+    let w = BQNValue::from(w);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue_mut(&mut o);
+    let id = w.as_string();
+    let state = x.try_into();
+    BQNValue::from(if let Ok(state) = state {
+        comm_widget_update(ctx, &id, &state);
+        if widget_update(ctx, &id, &state) {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    })
+    .copy()
+}
+
+unsafe extern "C" fn bqn_widget_display(obj: BQNV, x: BQNV) -> BQNV {
+    let o = BQNValue::from(obj);
+    let x = BQNValue::from(x);
+    let ctx = Context::from_bqnvalue(&o);
+    let id = x.as_string();
+    comm_widget_display(ctx, &id);
+    BQNValue::null().copy()
+}
+
 fn bqn_repl_init(ctx: &mut Context) -> BQNValue {
     BQNValue::init();
 
@@ -387,8 +377,11 @@ fn bqn_repl_init(ctx: &mut Context) -> BQNValue {
         BQNValue::fn1(bqn_notebook_clear, &obj),
         BQNValue::fn1(bqn_notebook_png, &obj),
         BQNValue::fn2(bqn_notebook_wav, &obj),
-        BQNValue::fn1(bqn_widget_test, &obj),
+        BQNValue::from(if cfg!(feature = "v6") { 1.0 } else { 0.0 }),
+        BQNValue::fn1(bqn_widget_init, &obj),
         BQNValue::fn2(bqn_widget_get, &obj),
+        BQNValue::fn2(bqn_widget_update, &obj),
+        BQNValue::fn1(bqn_widget_display, &obj),
     ]);
 
     BQNValue::call1(&replfun, &replarg)
@@ -726,8 +719,36 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                 );
                 send_msg(&shell, key, re);
             }
+            Some("comm_info_request") => {
+                // TODO: handle this properly
+                let re = match msg.content.get("target_name").and_then(|v| v.as_str()) {
+                    Some("jupyter.widget") | None => {
+                        let o: serde_json::Map<String, Value> = ctx
+                            .comm_objs
+                            .keys()
+                            .map(|k| (k.clone(), json!({"target_name": "jupyter.widget"})))
+                            .collect();
+                        reply_msg(
+                            &msg,
+                            json!({
+                                "status": "ok",
+                                "comms": o,
+                            }),
+                            None,
+                        )
+                    }
+                    Some(_) => reply_msg(
+                        &msg,
+                        json!({
+                            "status": "ok",
+                            "comms": {},
+                        }),
+                        None,
+                    ),
+                };
+                send_msg(&shell, key, re);
+            }
             Some("comm_open") => {
-                println!("{}", msg.content);
                 let id = msg.content["comm_id"].as_str().unwrap();
                 match msg.content["target_name"].as_str() {
                     Some("jupyter.widget.version") => {
@@ -756,7 +777,6 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                 }
             }
             Some("comm_msg") => {
-                println!("msg: {}", msg.content);
                 let id = msg.content["comm_id"].as_str().unwrap();
                 let data = &msg.content["data"];
                 match data["method"].as_str() {
@@ -765,9 +785,6 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                     }
                     Some("update") => {
                         widget_update(&mut ctx, id, &data["state"]);
-
-                        let st = ctx.get_state(id).unwrap();
-                        println!("value: {}", st["value"]);
                     }
                     Some("request_state") => {
                         if let Some(state) = ctx.get_state(id) {

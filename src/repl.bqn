@@ -1,6 +1,6 @@
 {⟨
     rawInput,rawOutput,rawDisplay,rawClear,rawPng, rawWav, 
-    widgetTest, widgetGet
+    isv6, widgetInit, widgetGet, widgetUpdate, widgetDisplay
 ⟩:
     IsString ← {(0≡•Type 𝕩)∧⊑(•internal.ElType 𝕩)∊[5,6,7]}
     IsNumericArray ← {(0≡•Type 𝕩)∧(•internal.ElType 𝕩)<5}
@@ -43,6 +43,62 @@
         s!ok, s
     }
 
+    widgets ← {
+        base ← {isv6? 
+            ⟨"jupyter-js-widgets", "~2.1.0"⟩;
+            ⟨"@jupyter-widgets/base", "2.0.0"⟩
+        }
+        controls ← {isv6? 
+            ⟨"jupyter-js-widgets", "~2.1.0"⟩;
+            ⟨"@jupyter-widgets/controls", "2.0.0"⟩
+        }
+        modelK ← ⟨"_model_module", "_model_module_version", "_model_name"⟩
+        viewK ← ⟨"_view_module", "_view_module_version", "_view_name"⟩
+        ModelBase ← {modelK≍base∾<𝕩∾"Model"}
+        Model ← {modelK≍controls∾<𝕩∾"Model"}
+        ViewBase ← {viewK≍base∾<𝕩∾"View"}
+        View ← {viewK≍controls∾<𝕩∾"View"}
+        WInit ← {{@: !"Cannot init widget"; 𝕩}WidgetInit 𝕩}
+        MakeWidget ← {
+            id ← WInit 𝕩
+            {
+                id ⇐ id
+                Get ⇐ {{@: !"Unknown attribute"; 𝕩}id WidgetGet 𝕩}
+                Update ⇐ {{0: !"Failed tp update"; @}id WidgetUpdate 𝕩}
+                Display ⇐ {𝕊: WidgetDisplay id}
+            }
+        }
+        And ← ∾⎉1
+        Ref ← "IPY_MODEL_"⊸∾
+        MkLayout ← {𝕊: WInit (ModelBase"Layout")And ViewBase"Layout"}
+        MkStyle ← {WInit (Model 𝕩∾"Style")And ViewBase"Style"}
+        Layout ← {[⟨"layout"⟩, ⟨Ref MkLayout 𝕩⟩]}
+        Style ← {[⟨"style"⟩, ⟨Ref MkStyle 𝕩⟩]}
+        Init ← {(Model 𝕩)And(View 𝕩)And Layout @}
+
+        null  ← <"null"
+        true  ← <"true"
+        false ← <"false"
+
+        IntSlider ⇐ {𝕊@: 𝕊⟨⟩;
+            a ← Init"IntSlider"
+            a And↩ Style"Slider"
+            a And↩ ⍉>⟨
+                "value"‿0
+                "min"‿0
+                "max"‿100
+                "step"‿1
+                "description"‿""
+                "disabled"‿false
+                "continuous_update"‿true
+                "orientation"‿"horizontal"
+                "readout"‿true,
+                "readout_format"‿"d"
+            ⟩
+            MakeWidget a And 𝕩
+        }
+    }
+
     •ReBQN {
         repl ⇐ "loose"
 
@@ -70,6 +126,7 @@
                     h ← "<div><audio controls src=""data:audio/wav;base64,"∾w∾""" /></div>"
                     HTML h, @
                 }
+                widgets ⇐ widgets
             }
             "platform"‿{
                 os ⇐ •platform.os
@@ -81,8 +138,6 @@
                 msg ← "•Exit is disabled for jupyter notebook. "
                 !msg∾"If in console, use )off to exit"
             }
-            "test"‿widgetTest
-            "get"‿widgetGet
         ⟩
     }
 }

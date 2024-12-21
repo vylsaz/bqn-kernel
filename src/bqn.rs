@@ -110,7 +110,7 @@ impl BQNValue {
         let bound = self.bound();
         let mut vec = Vec::with_capacity(bound);
         for i in 0..bound {
-            let s = self.pick(i).to_string();
+            let s = self.pick(i).as_string();
             vec.push(s);
         }
         vec
@@ -143,7 +143,7 @@ impl BQNValue {
                 let ret = r.pick(1);
                 Ok(ret)
             } else {
-                let err = r.pick(1).to_string();
+                let err = r.pick(1).as_string();
                 Err(err)
             }
         }
