@@ -460,7 +460,7 @@ fn bqn_is_complete(code: &str) -> &str {
     }
 
     let mut code = code;
-    while code.starts_with('%') {
+    while code.starts_with(')') {
         (_, code) = code.split_once('\n').unwrap_or(("", ""));
         if code.is_empty() {
             return "incomplete";
@@ -597,26 +597,25 @@ fn shell_execute(key: &str, shell: Socket, iopub: Socket, stdin: Socket) {
                 let mut post = None;
                 let mut with = None;
                 let rslt = loop {
-                    if code.starts_with(")off") {
-                        payload.push(json!({
-                            "source": "ask_exit",
-                            "keepkernel": false,
-                        }));
-                        break Ok("".to_owned());
-                    } else if code.starts_with('%') {
+                    if code.starts_with(')') {
                         let (cmd, next) = code.split_once('\n').unwrap_or((code, ""));
                         code = next;
 
-                        if cmd.starts_with("%r") {
+                        if cmd.starts_with(")r") {
                             silent = true;
                             post = Some(&nil);
-                        } else if cmd.starts_with("%use") {
+                        } else if cmd.starts_with(")use") {
                             let (_, r) = cmd.split_once(' ').unwrap_or(("", ""));
                             with = Some(r);
-                        } else if cmd.starts_with("%image") {
+                        } else if cmd.starts_with(")off") {
+                            payload.push(json!({
+                                "source": "ask_exit",
+                                "keepkernel": false,
+                            }));
+                        } else if cmd.starts_with(")image") {
                             silent = true;
                             post = Some(&img);
-                        } else if cmd.starts_with("%audio") {
+                        } else if cmd.starts_with(")audio") {
                             silent = true;
                             post = Some(&aud);
                         } else {

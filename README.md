@@ -42,26 +42,26 @@ The kernel cannot be interrupted.
   - `audioFreq`: 44100
 
 ### cell magic
-Start a cell with `%` to use magic. They need to be on their own lines.
+Start a cell with `)` to use magic. They need to be on their own lines.
 
 #### Don't print the final result
 ```
-%r
+)r
 ```
 #### Use a REPL function for the cell
 ```
-%use Func
+)use Func
 ```
 `Func` needs to be able to accept a (multiline) string as input and output a value.
 `Func` also needs to be able to evaluate `"•fmt"`.
 #### Display the final result as an image
 ```
-%image
+)image
 ```
 Calls `•jupyter.Image` on the final result
 #### Display the final result as an audio
 ```
-%audio
+)audio
 ```
 Calls `•jupyter.Audio` on the final result
 
