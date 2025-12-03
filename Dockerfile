@@ -16,7 +16,7 @@ RUN apt update && apt install -y clang python3 python3-pip python3-venv
 ENV BQN_VERSION=0.10.0
 
 WORKDIR /opt
-RUN git clone --recurse-submodules --depth 1 -b ${BQN_VERSION} https://github.com/dzaima/CBQN.git
+RUN git clone --recurse-submodules --depth 1 -b "v${BQN_VERSION}" https://github.com/dzaima/CBQN.git
 WORKDIR /opt/CBQN
 RUN make shared-o3
 RUN cp libcbqn.so /lib/libcbqn.so
