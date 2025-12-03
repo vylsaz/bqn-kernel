@@ -16,6 +16,7 @@ COPY ./Cargo.toml ./Cargo.toml
 COPY ./src/       ./src/
 COPY ./bqn/       ./bqn/
 COPY ./bqn-v6/    ./bqn-v6/
+# TODO jupyter notebook seems to use ipywidgets 8 now?
 RUN cargo run --features v6
 RUN cp -r ./bqn/  ./.local/share/jupyter/kernels/
 
