@@ -64,7 +64,7 @@
             {
                 id ⇐ id
                 Get ⇐ {{@: !"Unknown attribute"; 𝕩}id WidgetGet 𝕩}
-                Update ⇐ {{0: !"Failed tp update"; @}id WidgetUpdate 𝕩}
+                Update ⇐ {{0: !"Failed to update"; @}id WidgetUpdate 𝕩}
                 Display ⇐ {𝕊: WidgetDisplay id}
             }
         }
@@ -80,6 +80,67 @@
         true  ← <"true"
         false ← <"false"
 
+        CheckBox ⇐ {𝕊@: 𝕊⟨⟩;
+            a ← Init"Checkbox"
+            {isv6? @; a And↩ Style"Checkbox", @}
+            a And↩ ⍉>⟨
+                "description"‿""
+                "disabled"‿false
+                "value"‿false
+            ⟩
+            MakeWidget a And 𝕩
+        }
+
+        FloatProgress ⇐ {𝕊@: 𝕊⟨⟩;
+            a ← Layout @
+            a And↩ Model{isv6? "Progress"; "FloatProgress"}
+            a And↩ View"Progress"
+            a And↩ Style"Progress"
+            a And↩ ⍉>⟨
+                "bar_style"‿""
+                "description"‿""
+                "min"‿0.0
+                "max"‿1.0
+                "orientation"‿"horizontal"
+                "value"‿0.0
+            ⟩
+            MakeWidget a And 𝕩
+        }
+
+        FloatSlider ⇐ {𝕊@: 𝕊⟨⟩;
+            a ← Init"FloatSlider"
+            a And↩ Style"Slider"
+            a And↩ ⍉>⟨
+                "value"‿0.0
+                "min"‿0.0
+                "max"‿1.0
+                "step"‿0.1
+                "description"‿""
+                "disabled"‿false
+                "continuous_update"‿true
+                "orientation"‿"horizontal"
+                "readout"‿true,
+                "readout_format"‿".2f"
+            ⟩
+            MakeWidget a And 𝕩
+        }
+
+        IntProgress ⇐ {𝕊@: 𝕊⟨⟩;
+            a ← Layout @
+            a And↩ Model{isv6? "Progress"; "IntProgress"}
+            a And↩ View"Progress"
+            a And↩ Style"Progress"
+            a And↩ ⍉>⟨
+                "bar_style"‿""
+                "description"‿""
+                "min"‿0
+                "max"‿100
+                "orientation"‿"horizontal"
+                "value"‿0
+            ⟩
+            MakeWidget a And 𝕩
+        }
+
         IntSlider ⇐ {𝕊@: 𝕊⟨⟩;
             a ← Init"IntSlider"
             a And↩ Style"Slider"
@@ -94,6 +155,20 @@
                 "orientation"‿"horizontal"
                 "readout"‿true,
                 "readout_format"‿"d"
+            ⟩
+            MakeWidget a And 𝕩
+        }
+
+        ToggleButton ⇐ {𝕊@: 𝕊⟨⟩;
+            a ← Init"ToggleButton"
+            a And↩ Style"ToggleButton"
+            a And↩ ⍉>⟨
+                "button_style"‿""
+                "description"‿""
+                "disabled"‿false
+                "icon"‿""
+                "tooltip"‿null
+                "value"‿false
             ⟩
             MakeWidget a And 𝕩
         }
