@@ -1,6 +1,8 @@
 # bqn-kernel
 a jupyter kernel for BQN
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/vylsaz/bqn-kernel/HEAD?urlpath=%2Fdoc%2Ftree%2Findex.ipynb)
+
 ## build
 
 Require: libcbqn on [this commit](https://github.com/dzaima/CBQN/tree/0cd1ea9bdc02652fc800d49dc672fb1119cdcbe3) or newer.
