@@ -15,6 +15,11 @@ RUN apt update && apt install -y clang python3 python3-pip python3-venv
 
 ENV BQN_VERSION=0.10.0
 
+RUN python3 -m venv /opt/venv
+# Enable venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN python3 -m pip install --no-cache-dir notebook jupyterlab jupyterhub jupyterlab_bqn ipywidgets
+
 WORKDIR /opt
 RUN git clone --recurse-submodules --depth 1 -b "v${BQN_VERSION}" https://github.com/dzaima/CBQN.git
 WORKDIR /opt/CBQN
@@ -30,8 +35,3 @@ USER ${NB_USER}
 RUN mkdir -p .local/share/jupyter/kernels/bqn
 RUN cargo run
 RUN cp -r ./bqn/ ./.local/share/jupyter/kernels/
-
-RUN python3 -m venv ${HOME}/venv
-# Enable venv
-ENV PATH="${HOME}/venv/bin:$PATH"
-RUN python3 -m pip install --no-cache-dir notebook jupyterlab jupyterhub jupyterlab_bqn
